@@ -2,7 +2,7 @@
 pragma solidity >=0.7.0 <0.9.0;
 
 contract Closet {
-    struct Chest {
+    struct Safe {
         bool empty;
         uint256 amount;
         uint256 reward;
@@ -11,26 +11,21 @@ contract Closet {
         address thief;
     }
 
-    mapping(bytes32 => Chest) public chests;
+    mapping(bytes32 => Safe) public safes;
 
     mapping(address => uint256) public balances;
 
-    event Start(address indexed _owner, bytes32 _hash);
+    event Mounted(address indexed _owner, bytes32 _hash);
 
-    event End(address indexed _owner, bytes32 indexed _hash);
+    event Cracked(bytes32 indexed _hash, string _secret);
 
-    event Exposure(
-        string _secret,
-        address indexed _thief,
-        address indexed _owner,
-        bytes32 indexed _hash
-    );
+    event Emptied(bytes32 indexed _hash);
 
-    event Redeemable(address indexed _owner, uint256 _amount);
+    event Dismounted(bytes32 indexed _hash);
 
-    event Withdrawal(address indexed _address, uint256 _amount);
+    event Redeemed(address indexed _address, uint256 _amount);
 
-    function stake(
+    function mount(
         bytes32 _hash,
         uint256 amount,
         uint256 maturity
@@ -40,10 +35,10 @@ contract Closet {
         require(surplus >= 0, "Insufficient funds");
         uint256 reward = amount / 2;
         require(reward > 0, "Insufficient funds");
-        Chest memory chest = chests[_hash];
-        require(chest.reward == 0, "Existing hash");
+        Safe memory safe = safes[_hash];
+        require(safe.reward == 0, "Existing hash");
         balances[msg.sender] += surplus;
-        chests[_hash] = Chest(
+        safes[_hash] = Safe(
             false,
             amount,
             reward,
@@ -51,42 +46,46 @@ contract Closet {
             msg.sender,
             address(0)
         );
-        emit Start(msg.sender, _hash);
+        emit Mounted(msg.sender, _hash);
     }
 
-    function loot(string memory _secret) public {
+    function crack(string memory _secret) public {
         bytes32 hash = keccak256(abi.encodePacked(_secret));
-        Chest storage chest = chests[hash];
-        uint256 reward = chest.reward;
+        Safe storage safe = safes[hash];
+        uint256 reward = safe.reward;
         require(reward != 0, "Invalid secret or address");
-        uint256 maturity = chest.maturity;
+        uint256 maturity = safe.maturity;
         require(maturity > block.timestamp, "Expired maturity");
-        bool empty = chest.empty;
-        require(!empty, "Treasure stolen");
-        chest.empty = true;
-        chest.thief = msg.sender;
+        bool empty = safe.empty;
+        require(!empty, "Safe emptied");
+        safe.empty = true;
+        safe.thief = msg.sender;
         balances[msg.sender] += reward;
-        emit Exposure(_secret, msg.sender, chest.owner, hash);
-        emit End(chest.owner, hash);
+        emit Cracked(hash, _secret);
+        emit Emptied(hash);
     }
 
-    function redeem(string memory _secret, bytes32 _hash) public {
+    function dismount(string memory _secret, bytes32 _hash)
+        public
+        returns (string memory)
+    {
         uint256 sbs = bytes(_secret).length;
         require(sbs >= 16 && sbs <= 32, "Invalid byte size");
-        Chest storage chest = chests[_hash];
-        uint256 maturity = chest.maturity;
+        Safe storage safe = safes[_hash];
+        uint256 maturity = safe.maturity;
         require(maturity <= block.timestamp, "Unexpired maturity");
-        address owner = chest.owner;
-        require(owner == msg.sender, "Fraudulent owner");
+        address owner = safe.owner;
+        require(owner == msg.sender, "Unauthorized");
         bytes32 hash = keccak256(abi.encodePacked(_secret));
         require(hash == _hash, "Invalid secret or hash");
-        bool empty = chest.empty;
-        require(!empty, "Empty chest");
-        uint256 amount = chest.amount;
-        chest.empty = true;
+        bool empty = safe.empty;
+        require(!empty, "Safe emptied");
+        uint256 amount = safe.amount;
+        safe.empty = true;
         balances[owner] += amount;
-        emit Redeemable(owner, amount);
-        emit End(owner, _hash);
+        emit Emptied(_hash);
+        emit Dismounted(_hash);
+        return _secret;
     }
 
     function withdraw(uint256 amount) public payable {
@@ -95,6 +94,6 @@ contract Closet {
         require(surplus >= 0, "Insufficient funds");
         balances[msg.sender] = surplus;
         payable(msg.sender).transfer(amount);
-        emit Withdrawal(msg.sender, amount);
+        emit Redeemed(msg.sender, amount);
     }
 }
