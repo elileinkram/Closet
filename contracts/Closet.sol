@@ -17,19 +17,22 @@ contract Closet {
     }
 
     struct LockupConstraints {
-        uint64 min;
+        uint256 min;
         uint256 max;
     }
 
-    uint8 takeRate;
-
-    uint16 burnRate;
+    struct Rates {
+        uint16 take;
+        uint16 burn;
+    }
 
     uint32 minStake;
 
     LockupConstraints lockupConstraints;
 
     ByteConstraints byteConstraints;
+
+    Rates rates;
 
     mapping(bytes32 => Safe) public safes;
 
@@ -53,12 +56,12 @@ contract Closet {
         _;
     }
 
-    modifier preUnlock(uint256 _timelock) {
+    modifier preLock(uint256 _timelock) {
         require(_timelock > block.timestamp, "Lock expired");
         _;
     }
 
-    modifier postLockup(uint256 _timelock) {
+    modifier postLock(uint256 _timelock) {
         require(block.timestamp >= _timelock, "Not yet unlocked");
         _;
     }
@@ -68,7 +71,7 @@ contract Closet {
         _;
     }
 
-    modifier realityCheck(Safe storage safe) {
+    modifier safeDetect(Safe storage safe) {
         require(safe.reward != 0, "Invalid secret or address");
         require(!safe.empty, "Safe emptied");
         _;
@@ -83,7 +86,7 @@ contract Closet {
         uint256 byteSize = bytes(_secret).length;
         require(
             byteSize >= byteConstraints.min && byteSize <= byteConstraints.max,
-            "Invalid secret constraints"
+            "Outside byte range"
         );
         _;
     }
@@ -98,16 +101,22 @@ contract Closet {
         uint256 period = _timelock - block.timestamp;
         require(
             period <= lockupConstraints.max && period >= lockupConstraints.min,
-            "Invalid time constraints"
+            "Outside time range"
         );
+        _;
+    }
+
+    modifier validWithdrawal(uint256 amount) {
+        uint256 balance = balances[msg.sender];
+        require(balance >= amount, "Insufficient funds");
         _;
     }
 
     function _calculateReward(uint256 _amount) private view returns (uint256) {
         return
             _amount -
-            (_amount * (burnRate / 1000)) -
-            (_amount * (takeRate / 1000));
+            (_amount * (rates.burn / (type(uint16).max))) -
+            (_amount * (rates.take / type(uint16).max));
     }
 
     function hide(
@@ -145,14 +154,14 @@ contract Closet {
 
     function _loot(
         string memory _secret,
-        bytes32 hash,
+        bytes32 _hash,
         Safe storage safe
-    ) private realityCheck(safe) preUnlock(safe.timelock) {
+    ) private safeDetect(safe) preLock(safe.timelock) {
         safe.empty = true;
         safe.thief = msg.sender;
         balances[msg.sender] += safe.reward;
-        emit Cracked(hash, _secret);
-        emit Emptied(hash);
+        emit Cracked(_hash, _secret);
+        emit Emptied(_hash);
     }
 
     function reveal(string memory _secret, bytes32 _hash)
@@ -172,8 +181,8 @@ contract Closet {
     )
         private
         onlyOwner(safe.owner)
-        realityCheck(safe)
-        postLockup(safe.timelock)
+        safeDetect(safe)
+        postLock(safe.timelock)
         returns (string memory)
     {
         safe.empty = true;
@@ -183,10 +192,8 @@ contract Closet {
         return _secret;
     }
 
-    function withdraw(uint256 amount) public payable {
-        uint256 balance = balances[msg.sender];
-        require(balance >= amount, "Insufficient funds");
-        balances[msg.sender] = balance - amount;
+    function withdraw(uint256 amount) public payable validWithdrawal(amount) {
+        balances[msg.sender] -= amount;
         payable(msg.sender).transfer(amount);
         emit Redeemed(msg.sender, amount);
     }
