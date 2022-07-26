@@ -107,8 +107,7 @@ contract Closet {
     }
 
     modifier validWithdrawal(uint256 amount) {
-        uint256 balance = balances[msg.sender];
-        require(balance >= amount, "Insufficient funds");
+        require(balances[msg.sender] >= amount, "Insufficient funds");
         _;
     }
 
