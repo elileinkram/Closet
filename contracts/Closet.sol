@@ -11,20 +11,25 @@ contract Closet {
         address thief;
     }
 
-    struct Constraints {
-        uint256 min;
+    struct ByteConstraints {
+        uint8 min;
+        uint8 max;
+    }
+
+    struct LockupConstraints {
+        uint64 min;
         uint256 max;
     }
 
-    uint16 takeRate;
+    uint8 takeRate;
 
     uint16 burnRate;
 
-    uint64 minStake;
+    uint32 minStake;
 
-    Constraints lockupConstraints;
+    LockupConstraints lockupConstraints;
 
-    Constraints byteConstraints;
+    ByteConstraints byteConstraints;
 
     mapping(bytes32 => Safe) public safes;
 
