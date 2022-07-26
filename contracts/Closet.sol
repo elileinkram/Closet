@@ -3,7 +3,7 @@ pragma solidity >=0.8.0 <0.9.0;
 
 contract Closet {
     struct Safe {
-        bool empty;
+        bool mounted;
         uint256 amount;
         uint256 timelock;
         uint256 reward;
@@ -16,7 +16,7 @@ contract Closet {
         uint8 max;
     }
 
-    struct LockupConstraints {
+    struct LockConstraints {
         uint256 min;
         uint256 max;
     }
@@ -26,9 +26,9 @@ contract Closet {
         uint16 burn;
     }
 
-    uint32 minStake;
+    uint64 minStake;
 
-    LockupConstraints lockupConstraints;
+    LockConstraints lockConstraints;
 
     ByteConstraints byteConstraints;
 
@@ -38,15 +38,79 @@ contract Closet {
 
     mapping(address => uint256) public balances;
 
+    constructor(
+        uint8 _minBytes,
+        uint8 _maxBytes,
+        uint256 _minLockupPeriod,
+        uint256 _maxLockupPeriod,
+        uint16 _takeRate,
+        uint16 _burnRate,
+        uint64 _minStake
+    )
+        checkConstraints(
+            _minBytes,
+            _maxBytes,
+            _minLockupPeriod,
+            _maxLockupPeriod
+        )
+        checkRates(_takeRate, _burnRate)
+        onlyPositive(
+            _minBytes,
+            _minLockupPeriod,
+            _takeRate,
+            _burnRate,
+            _minStake
+        )
+    {
+        byteConstraints = ByteConstraints(_minBytes, _maxBytes);
+        lockConstraints = LockConstraints(_minLockupPeriod, _maxLockupPeriod);
+        rates = Rates(_takeRate, _burnRate);
+        minStake = _minStake;
+    }
+
     event Mounted(address indexed _owner, bytes32 _hash);
 
     event Cracked(bytes32 indexed _hash, string _secret);
 
-    event Emptied(bytes32 indexed _hash);
-
     event Unmounted(bytes32 indexed _hash);
 
     event Redeemed(address indexed _address, uint256 _amount);
+
+    modifier onlyPositive(
+        uint8 _minBytes,
+        uint256 _minLockupPeriod,
+        uint16 _takeRate,
+        uint16 _burnRate,
+        uint64 _minStake
+    ) {
+        require(
+            _minBytes != 0 &&
+                _minLockupPeriod != 0 &&
+                _takeRate != 0 &&
+                _burnRate != 0 &&
+                _minStake != 0,
+            "Invalid input parameters"
+        );
+        _;
+    }
+
+    modifier checkConstraints(
+        uint8 _minBytes,
+        uint8 _maxBytes,
+        uint256 _minLockupPeriod,
+        uint256 _maxLockupPeriod
+    ) {
+        require(
+            _maxBytes > _minBytes && _maxLockupPeriod > _minLockupPeriod,
+            "Invalid constraints"
+        );
+        _;
+    }
+
+    modifier checkRates(uint16 _takeRate, uint16 _burnRate) {
+        require(_takeRate + _burnRate < type(uint16).max, "Invalid rates");
+        _;
+    }
 
     modifier fundingSecured(uint256 _amount) {
         require(
@@ -56,24 +120,23 @@ contract Closet {
         _;
     }
 
-    modifier preLock(uint256 _timelock) {
+    modifier preLockupPeriod(uint256 _timelock) {
         require(_timelock > block.timestamp, "Lock expired");
         _;
     }
 
-    modifier postLock(uint256 _timelock) {
+    modifier postLockupPeriod(uint256 _timelock) {
         require(block.timestamp >= _timelock, "Not yet unlocked");
         _;
     }
 
-    modifier vacancyCheck(bytes32 _hash) {
-        require(safes[_hash].reward == 0, "Occupied safe");
+    modifier isVacant(bytes32 _hash) {
+        require(safes[_hash].reward == 0, "Safe taken");
         _;
     }
 
-    modifier safeDetect(Safe storage safe) {
-        require(safe.reward != 0, "Invalid secret or address");
-        require(!safe.empty, "Safe emptied");
+    modifier isMounted(Safe memory _safe) {
+        require(_safe.mounted, "Safe emptied");
         _;
     }
 
@@ -82,11 +145,20 @@ contract Closet {
         _;
     }
 
-    modifier validByteSize(string memory _secret) {
+    modifier inByteRange(string memory _secret) {
         uint256 byteSize = bytes(_secret).length;
         require(
             byteSize >= byteConstraints.min && byteSize <= byteConstraints.max,
             "Outside byte range"
+        );
+        _;
+    }
+
+    modifier inTimeRange(uint256 _timelock) {
+        uint256 period = _timelock - block.timestamp;
+        require(
+            period >= lockConstraints.min && period <= lockConstraints.max,
+            "Outside time range"
         );
         _;
     }
@@ -97,16 +169,7 @@ contract Closet {
         _;
     }
 
-    modifier validTimelock(uint256 _timelock) {
-        uint256 period = _timelock - block.timestamp;
-        require(
-            period <= lockupConstraints.max && period >= lockupConstraints.min,
-            "Outside time range"
-        );
-        _;
-    }
-
-    modifier validWithdrawal(uint256 amount) {
+    modifier redeemable(uint256 amount) {
         require(balances[msg.sender] >= amount, "Insufficient funds");
         _;
     }
@@ -132,9 +195,9 @@ contract Closet {
         uint256 _amount,
         uint256 _timelock,
         uint256 _reward
-    ) private validTimelock(_timelock) vacancyCheck(_hash) {
+    ) private inTimeRange(_timelock) isVacant(_hash) {
         safes[_hash] = Safe(
-            false,
+            true,
             _amount,
             _timelock,
             _reward,
@@ -155,17 +218,17 @@ contract Closet {
         string memory _secret,
         bytes32 _hash,
         Safe storage safe
-    ) private safeDetect(safe) preLock(safe.timelock) {
-        safe.empty = true;
+    ) private isMounted(safe) preLockupPeriod(safe.timelock) {
+        safe.mounted = false;
         safe.thief = msg.sender;
         balances[msg.sender] += safe.reward;
         emit Cracked(_hash, _secret);
-        emit Emptied(_hash);
+        emit Unmounted(_hash);
     }
 
     function reveal(string memory _secret, bytes32 _hash)
         public
-        validByteSize(_secret)
+        inByteRange(_secret)
         validKey(_secret, _hash)
         returns (string memory)
     {
@@ -180,18 +243,17 @@ contract Closet {
     )
         private
         onlyOwner(safe.owner)
-        safeDetect(safe)
-        postLock(safe.timelock)
+        isMounted(safe)
+        postLockupPeriod(safe.timelock)
         returns (string memory)
     {
-        safe.empty = true;
+        safe.mounted = false;
         balances[safe.owner] += safe.amount;
-        emit Emptied(_hash);
         emit Unmounted(_hash);
         return _secret;
     }
 
-    function withdraw(uint256 amount) public payable validWithdrawal(amount) {
+    function withdraw(uint256 amount) public payable redeemable(amount) {
         balances[msg.sender] -= amount;
         payable(msg.sender).transfer(amount);
         emit Redeemed(msg.sender, amount);
