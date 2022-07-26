@@ -28,15 +28,15 @@ contract Closet {
 
     uint64 minStake;
 
-    LockConstraints lockConstraints;
-
     ByteConstraints byteConstraints;
+
+    LockConstraints lockConstraints;
 
     Rates rates;
 
-    mapping(bytes32 => Safe) public safes;
+    mapping(bytes32 => Safe) safes;
 
-    mapping(address => uint256) public balances;
+    mapping(address => uint256) balances;
 
     constructor(
         uint8 _minBytes,
@@ -120,13 +120,13 @@ contract Closet {
         _;
     }
 
-    modifier preLockupPeriod(uint256 _timelock) {
-        require(_timelock > block.timestamp, "Lock expired");
+    modifier isLocked(uint256 _timelock) {
+        require(_timelock > block.timestamp, "Unlocked safe");
         _;
     }
 
-    modifier postLockupPeriod(uint256 _timelock) {
-        require(block.timestamp >= _timelock, "Not yet unlocked");
+    modifier isUnlocked(uint256 _timelock) {
+        require(block.timestamp >= _timelock, "Locked safe");
         _;
     }
 
@@ -136,7 +136,7 @@ contract Closet {
     }
 
     modifier isMounted(Safe memory _safe) {
-        require(_safe.mounted, "Safe emptied");
+        require(_safe.mounted, "Unmounted safe");
         _;
     }
 
@@ -154,7 +154,7 @@ contract Closet {
         _;
     }
 
-    modifier inTimeRange(uint256 _timelock) {
+    modifier inTimezone(uint256 _timelock) {
         uint256 period = _timelock - block.timestamp;
         require(
             period >= lockConstraints.min && period <= lockConstraints.max,
@@ -195,7 +195,7 @@ contract Closet {
         uint256 _amount,
         uint256 _timelock,
         uint256 _reward
-    ) private inTimeRange(_timelock) isVacant(_hash) {
+    ) private isVacant(_hash) inTimezone(_timelock) {
         safes[_hash] = Safe(
             true,
             _amount,
@@ -218,7 +218,7 @@ contract Closet {
         string memory _secret,
         bytes32 _hash,
         Safe storage safe
-    ) private isMounted(safe) preLockupPeriod(safe.timelock) {
+    ) private isMounted(safe) isLocked(safe.timelock) {
         safe.mounted = false;
         safe.thief = msg.sender;
         balances[msg.sender] += safe.reward;
@@ -244,7 +244,7 @@ contract Closet {
         private
         onlyOwner(safe.owner)
         isMounted(safe)
-        postLockupPeriod(safe.timelock)
+        isUnlocked(safe.timelock)
         returns (string memory)
     {
         safe.mounted = false;
@@ -261,5 +261,9 @@ contract Closet {
 
     function checkBalance() public view returns (uint256) {
         return balances[msg.sender];
+    }
+
+    function checkSafe(bytes32 hash) public view returns (Safe memory) {
+        return safes[hash];
     }
 }
