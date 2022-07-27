@@ -262,7 +262,7 @@ contract Closet {
         emit Redeemed(msg.sender, _amount);
     }
 
-    function checkBalance() public view returns (uint256) {
+    function myBalance() public view returns (uint256) {
         return balances[msg.sender];
     }
 }
