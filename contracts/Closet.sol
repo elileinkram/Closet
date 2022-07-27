@@ -4,8 +4,8 @@ pragma solidity >=0.8.0 <0.9.0;
 contract Closet {
     struct Safe {
         bool mounted;
-        uint256 amount;
-        uint256 timelock;
+        uint256 stake;
+        uint256 expiry;
         uint256 reward;
         address owner;
         address thief;
@@ -16,7 +16,7 @@ contract Closet {
         uint8 max;
     }
 
-    struct LockConstraints {
+    struct PeriodConstraints {
         uint256 min;
         uint256 max;
     }
@@ -26,17 +26,17 @@ contract Closet {
         uint16 burn;
     }
 
-    uint64 minStake;
+    uint64 public minStake;
 
-    ByteConstraints byteConstraints;
+    ByteConstraints public byteConstraints;
 
-    LockConstraints lockConstraints;
+    PeriodConstraints public periodConstraints;
 
-    Rates rates;
+    Rates public rates;
 
     mapping(bytes32 => Safe) public safes;
 
-    mapping(address => uint256) balances;
+    mapping(address => uint256) private balances;
 
     constructor(
         uint8 _minBytes,
@@ -63,7 +63,10 @@ contract Closet {
         )
     {
         byteConstraints = ByteConstraints(_minBytes, _maxBytes);
-        lockConstraints = LockConstraints(_minLockupPeriod, _maxLockupPeriod);
+        periodConstraints = PeriodConstraints(
+            _minLockupPeriod,
+            _maxLockupPeriod
+        );
         rates = Rates(_takeRate, _burnRate);
         minStake = _minStake;
     }
@@ -112,26 +115,26 @@ contract Closet {
         _;
     }
 
-    modifier fundingSecured(uint256 _amount) {
+    modifier fundingSecured(uint256 _stake) {
         require(
-            _amount >= minStake && msg.value >= _amount,
+            _stake >= minStake && msg.value >= _stake,
             "Insufficient funds"
         );
         _;
     }
 
-    modifier isLocked(uint256 _timelock) {
-        require(_timelock > block.timestamp, "Unlocked safe");
+    modifier isLocked(uint256 _expiry) {
+        require(_expiry > block.timestamp, "Unlocked safe");
         _;
     }
 
-    modifier isUnlocked(uint256 _timelock) {
-        require(block.timestamp >= _timelock, "Locked safe");
+    modifier isUnlocked(uint256 _expiry) {
+        require(block.timestamp >= _expiry, "Locked safe");
         _;
     }
 
-    modifier isVacant(bytes32 _hash) {
-        require(safes[_hash].reward == 0, "Safe taken");
+    modifier isOwnerless(bytes32 _hash) {
+        require(safes[_hash].owner == address(0), "Safe taken");
         _;
     }
 
@@ -154,16 +157,16 @@ contract Closet {
         _;
     }
 
-    modifier inTimezone(uint256 _timelock) {
-        uint256 period = _timelock - block.timestamp;
+    modifier checkTimeFrame(uint256 _expiry) {
+        uint256 period = _expiry - block.timestamp;
         require(
-            period >= lockConstraints.min && period <= lockConstraints.max,
+            period >= periodConstraints.min && period <= periodConstraints.max,
             "Outside time range"
         );
         _;
     }
 
-    modifier validKey(string memory _secret, bytes32 _hash) {
+    modifier checkPassword(string memory _secret, bytes32 _hash) {
         bytes32 hash = keccak256(abi.encodePacked(_secret));
         require(hash == _hash, "Invalid secret or hash");
         _;
@@ -174,37 +177,37 @@ contract Closet {
         _;
     }
 
-    function _calculateReward(uint256 _amount) private view returns (uint256) {
+    function _calculateReward(uint256 _stake) private view returns (uint256) {
         return
-            _amount -
-            (_amount * (rates.burn / (type(uint16).max))) -
-            (_amount * (rates.take / type(uint16).max));
+            _stake -
+            (_stake * (rates.burn / (type(uint16).max))) -
+            (_stake * (rates.take / type(uint16).max));
     }
 
     function hide(
         bytes32 _hash,
-        uint256 _amount,
-        uint256 _timelock
-    ) public payable fundingSecured(_amount) {
-        uint256 reward = _calculateReward(_amount);
-        _mount(_hash, _amount, _timelock, reward);
+        uint256 _stake,
+        uint256 _expiry
+    ) public payable fundingSecured(_stake) {
+        uint256 reward = _calculateReward(_stake);
+        _mount(_hash, _stake, _expiry, reward);
     }
 
     function _mount(
         bytes32 _hash,
-        uint256 _amount,
-        uint256 _timelock,
+        uint256 _stake,
+        uint256 _expiry,
         uint256 _reward
-    ) private isVacant(_hash) inTimezone(_timelock) {
+    ) private isOwnerless(_hash) checkTimeFrame(_expiry) {
         safes[_hash] = Safe(
             true,
-            _amount,
-            _timelock,
+            _stake,
+            _expiry,
             _reward,
             msg.sender,
             address(0)
         );
-        balances[msg.sender] += (msg.value - _amount);
+        balances[msg.sender] += (msg.value - _stake);
         emit Mounted(msg.sender, _hash);
     }
 
@@ -218,7 +221,7 @@ contract Closet {
         string memory _secret,
         bytes32 _hash,
         Safe storage safe
-    ) private isMounted(safe) isLocked(safe.timelock) {
+    ) private isMounted(safe) isLocked(safe.expiry) {
         safe.mounted = false;
         safe.thief = msg.sender;
         balances[msg.sender] += safe.reward;
@@ -229,7 +232,7 @@ contract Closet {
     function reveal(string memory _secret, bytes32 _hash)
         public
         inByteRange(_secret)
-        validKey(_secret, _hash)
+        checkPassword(_secret, _hash)
         returns (string memory)
     {
         Safe storage safe = safes[_hash];
@@ -244,19 +247,19 @@ contract Closet {
         private
         onlyOwner(safe.owner)
         isMounted(safe)
-        isUnlocked(safe.timelock)
+        isUnlocked(safe.expiry)
         returns (string memory)
     {
         safe.mounted = false;
-        balances[safe.owner] += safe.amount;
+        balances[safe.owner] += safe.stake;
         emit Unmounted(_hash);
         return _secret;
     }
 
-    function withdraw(uint256 amount) public payable redeemable(amount) {
-        balances[msg.sender] -= amount;
-        payable(msg.sender).transfer(amount);
-        emit Redeemed(msg.sender, amount);
+    function withdraw(uint256 _amount) public payable redeemable(_amount) {
+        balances[msg.sender] -= _amount;
+        payable(msg.sender).transfer(_amount);
+        emit Redeemed(msg.sender, _amount);
     }
 
     function checkBalance() public view returns (uint256) {
