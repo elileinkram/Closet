@@ -36,7 +36,7 @@ contract Closet {
 
     mapping(bytes32 => Safe) public safes;
 
-    mapping(address => uint256) private balances;
+    mapping(address => uint256) public balances;
 
     constructor(
         uint8 _minBytes,
@@ -260,9 +260,5 @@ contract Closet {
         balances[msg.sender] -= _amount;
         payable(msg.sender).transfer(_amount);
         emit Redeemed(msg.sender, _amount);
-    }
-
-    function myBalance() public view returns (uint256) {
-        return balances[msg.sender];
     }
 }
