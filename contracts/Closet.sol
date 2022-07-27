@@ -34,7 +34,7 @@ contract Closet {
 
     Rates rates;
 
-    mapping(bytes32 => Safe) safes;
+    mapping(bytes32 => Safe) public safes;
 
     mapping(address => uint256) balances;
 
@@ -261,9 +261,5 @@ contract Closet {
 
     function checkBalance() public view returns (uint256) {
         return balances[msg.sender];
-    }
-
-    function checkSafe(bytes32 hash) public view returns (Safe memory) {
-        return safes[hash];
     }
 }
