@@ -121,8 +121,8 @@ contract Closet {
         _;
     }
 
-    modifier isOwnerless(bytes32 _hash) {
-        require(safes[_hash].owner == address(0), "Safe taken");
+    modifier isOwnerless(Safe memory _safe) {
+        require(_safe.owner == address(0), "Safe taken");
         _;
     }
 
@@ -178,50 +178,56 @@ contract Closet {
         uint256 _expiry
     ) public payable fundingSecured(_stake) {
         uint256 reward = _calculateReward(_stake);
-        _mount(_hash, _stake, _expiry, reward);
-    }
-
-    function _mount(
-        bytes32 _hash,
-        uint256 _stake,
-        uint256 _expiry,
-        uint256 _reward
-    ) private isOwnerless(_hash) checkTimeFrame(_expiry) {
-        safes[_hash] = Safe(
+        Safe memory safe = Safe(
             true,
             _stake,
             _expiry,
-            _reward,
+            reward,
             msg.sender,
             address(0)
         );
-        balances[msg.sender] += (msg.value - _stake);
+        _mount(_hash, safe);
+    }
+
+    function _mount(bytes32 _hash, Safe memory _safe)
+        private
+        isOwnerless(_safe)
+        checkTimeFrame(_safe.expiry)
+    {
+        safes[_hash] = _safe;
+        balances[msg.sender] += (msg.value - _safe.stake);
         emit Mounted(msg.sender, _hash);
     }
 
-    function crack(string memory _secret) public {
+    function crack(string memory _secret) public returns (bool, string memory) {
         bytes32 hash = keccak256(abi.encodePacked(_secret));
         Safe storage safe = safes[hash];
-        _loot(_secret, hash, safe);
+        return _loot(_secret, hash, safe);
     }
 
     function _loot(
         string memory _secret,
         bytes32 _hash,
         Safe storage safe
-    ) private isMounted(safe) isLocked(safe.expiry) {
+    )
+        private
+        isMounted(safe)
+        isLocked(safe.expiry)
+        returns (bool, string memory)
+    {
         safe.mounted = false;
         safe.thief = msg.sender;
         balances[msg.sender] += safe.reward;
         emit Cracked(_hash, _secret);
         emit Unmounted(_hash);
+        return (false, _secret);
     }
 
     function reveal(string memory _secret, bytes32 _hash)
         public
         inByteRange(_secret)
         checkPassword(_secret, _hash)
-        returns (string memory)
+        returns (bool, string memory)
     {
         Safe storage safe = safes[_hash];
         return _dismount(_secret, _hash, safe);
@@ -236,12 +242,12 @@ contract Closet {
         onlyOwner(safe.owner)
         isMounted(safe)
         isUnlocked(safe.expiry)
-        returns (string memory)
+        returns (bool, string memory)
     {
         safe.mounted = false;
         balances[safe.owner] += safe.stake;
         emit Unmounted(_hash);
-        return _secret;
+        return (true, _secret);
     }
 
     function withdraw(uint256 _amount) public payable redeemable(_amount) {
