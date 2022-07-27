@@ -39,35 +39,24 @@ contract Closet {
     mapping(address => uint256) public balances;
 
     constructor(
-        uint8 _minBytes,
-        uint8 _maxBytes,
-        uint256 _minLockupPeriod,
-        uint256 _maxLockupPeriod,
-        uint16 _takeRate,
-        uint16 _burnRate,
+        ByteConstraints memory _byteConstraints,
+        PeriodConstraints memory _periodConstraints,
+        Rates memory _rates,
         uint64 _minStake
     )
-        checkConstraints(
-            _minBytes,
-            _maxBytes,
-            _minLockupPeriod,
-            _maxLockupPeriod
-        )
-        checkRates(_takeRate, _burnRate)
+        checkConstraints(_byteConstraints, _periodConstraints)
+        checkRates(_rates)
         onlyPositive(
-            _minBytes,
-            _minLockupPeriod,
-            _takeRate,
-            _burnRate,
+            _byteConstraints.min,
+            _periodConstraints.min,
+            _rates.take,
+            _rates.burn,
             _minStake
         )
     {
-        byteConstraints = ByteConstraints(_minBytes, _maxBytes);
-        periodConstraints = PeriodConstraints(
-            _minLockupPeriod,
-            _maxLockupPeriod
-        );
-        rates = Rates(_takeRate, _burnRate);
+        byteConstraints = _byteConstraints;
+        periodConstraints = _periodConstraints;
+        rates = _rates;
         minStake = _minStake;
     }
 
@@ -98,20 +87,19 @@ contract Closet {
     }
 
     modifier checkConstraints(
-        uint8 _minBytes,
-        uint8 _maxBytes,
-        uint256 _minLockupPeriod,
-        uint256 _maxLockupPeriod
+        ByteConstraints memory _byteConstraints,
+        PeriodConstraints memory _periodConstraints
     ) {
         require(
-            _maxBytes > _minBytes && _maxLockupPeriod > _minLockupPeriod,
+            _byteConstraints.max > _byteConstraints.min &&
+                _periodConstraints.max > _periodConstraints.min,
             "Invalid constraints"
         );
         _;
     }
 
-    modifier checkRates(uint16 _takeRate, uint16 _burnRate) {
-        require(_takeRate + _burnRate < type(uint16).max, "Invalid rates");
+    modifier checkRates(Rates memory _rates) {
+        require(_rates.take + _rates.burn < type(uint16).max, "Invalid rates");
         _;
     }
 
