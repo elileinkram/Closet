@@ -1,2 +1,2 @@
 # OathKeeper
-Put your money where your oath is.
+Put your money where your money is.
