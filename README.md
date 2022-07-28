@@ -1,2 +1,2 @@
 # OathEatr
-Put your money where your mouth is.
+Put your money where your oath is.
