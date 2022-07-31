@@ -105,23 +105,48 @@ contract ERC20Token is IERC20 {
 }
 
 contract Governance {
+    enum StrategyType {
+        moreYayThanNay,
+        moreYayThanPossibleNay
+    }
+
+    struct StrategyConstraints {
+        StrategyType strategyType;
+        PeriodConstraints periodConstraints;
+        uint16 nayMultiplier;
+        uint256 minStake;
+    }
+
+    struct ProposalConstraints {
+        StrategyConstraints mytnConstraints;
+        StrategyConstraints mytpnConstraints;
+    }
+
+    struct Ballot {
+        uint256 yays;
+        uint256 nays;
+    }
+
+    struct Vote {
+        bool vote;
+        uint256 stake;
+    }
+
     struct Proposal {
         address author;
-        ByteConstraints byteConstraints;
-        PeriodConstraints periodConstraints;
-        VotingConstraints votingConstraints;
-        Rates rates;
-        Token[] approvedTokens;
+        mapping(address => Vote) votes;
+        Ballot ballot;
+        StrategyConstraints strategyConstraints;
+        ByteConstraints newByteConstraints;
+        PeriodConstraints newPeriodConstraints;
+        Rates newRates;
+        ProposalConstraints newProposalConstraints;
+        Token newToken;
     }
 
     struct Token {
         address address_;
         uint256 minStake;
-    }
-
-    struct VotingConstraints {
-        PeriodConstraints periodConstraints;
-        uint32 minStake;
     }
 
     struct ByteConstraints {
@@ -139,7 +164,7 @@ contract Governance {
         uint16 take;
     }
 
-    OathFactory oathFactory;
+    OathFactory public oathFactory;
 
     ByteConstraints public byteConstraints;
 
@@ -149,14 +174,16 @@ contract Governance {
 
     Token[] public approvedTokens;
 
-    VotingConstraints public votingConstraints;
+    ProposalConstraints public proposalConstraints;
 
     ERC20Token public oathToken;
+
+    Proposal[] public proposals;
 
     constructor(
         ByteConstraints memory _byteConstraints,
         PeriodConstraints memory _periodConstraints,
-        VotingConstraints memory _votingConstraints,
+        ProposalConstraints memory _proposalConstraints,
         Rates memory _rates,
         address[] memory _tokenAddresses,
         uint256[] memory _tokenStakes
@@ -164,22 +191,22 @@ contract Governance {
         checkConstraints(
             _byteConstraints,
             _periodConstraints,
-            _votingConstraints
+            _proposalConstraints
         )
         checkRates(_rates)
         onlyPositive(
             _byteConstraints.min,
             _periodConstraints.min,
-            _votingConstraints.periodConstraints.min,
+            _proposalConstraints.mytpnConstraints.periodConstraints.min,
             _rates.take,
             _rates.burn,
-            _votingConstraints.minStake
+            _proposalConstraints.mytnConstraints.minStake
         )
     {
         _approveTokens(_tokenAddresses, _tokenStakes);
         byteConstraints = _byteConstraints;
         periodConstraints = _periodConstraints;
-        votingConstraints = _votingConstraints;
+        proposalConstraints = _proposalConstraints;
         rates = _rates;
         oathFactory = new OathFactory(Governance(this));
         oathToken = new ERC20Token(msg.sender);
@@ -190,14 +217,10 @@ contract Governance {
         uint256[] memory _tokenStakes
     ) private {
         require(_tokenAddresses.length == _tokenStakes.length);
-        require(
-            _tokenAddresses.length <= type(uint16).max,
-            "Token limit exceeded"
-        );
-        for (uint16 i = 0; i < _tokenAddresses.length; i++) {
+        for (uint256 i = 0; i < _tokenAddresses.length; i++) {
             require(_tokenAddresses[i] != address(0) && _tokenStakes[i] != 0);
             approvedTokens.push(Token(_tokenAddresses[i], _tokenStakes[i]));
-            for (uint16 j = i + 1; j < _tokenAddresses.length; j++) {
+            for (uint256 j = i + 1; j < _tokenAddresses.length; j++) {
                 require(
                     _tokenAddresses[i] != _tokenAddresses[j],
                     "Duplicate token address"
@@ -209,20 +232,39 @@ contract Governance {
     modifier checkConstraints(
         ByteConstraints memory _byteConstraints,
         PeriodConstraints memory _periodConstraints,
-        VotingConstraints memory _votingConstraints
+        ProposalConstraints memory _proposalConstraints
     ) {
         require(
             _byteConstraints.max > _byteConstraints.min &&
                 _periodConstraints.max > _periodConstraints.min &&
-                _votingConstraints.periodConstraints.max >
-                _votingConstraints.periodConstraints.min,
+                _proposalConstraints.mytpnConstraints.periodConstraints.max >
+                _proposalConstraints.mytpnConstraints.periodConstraints.min &&
+                _proposalConstraints.mytnConstraints.periodConstraints.max >
+                _proposalConstraints.mytnConstraints.periodConstraints.min &&
+                _proposalConstraints.mytnConstraints.periodConstraints.min >
+                _proposalConstraints.mytpnConstraints.periodConstraints.min &&
+                _proposalConstraints.mytnConstraints.minStake <
+                _proposalConstraints.mytpnConstraints.minStake &&
+                _proposalConstraints.mytnConstraints.nayMultiplier >
+                _proposalConstraints.mytpnConstraints.nayMultiplier,
             "Invalid constraints"
+        );
+        require(
+            _proposalConstraints.mytnConstraints.nayMultiplier <=
+                ((type(uint16).max - 1) / 3) &&
+                _proposalConstraints.mytnConstraints.nayMultiplier % 2 == 0 &&
+                _proposalConstraints.mytpnConstraints.nayMultiplier % 2 == 0
         );
         _;
     }
 
     modifier checkRates(Rates memory _rates) {
-        require(_rates.take + _rates.burn < type(uint16).max, "Invalid rates");
+        require(
+            (_rates.take + _rates.burn < type(uint16).max - 1) &&
+                _rates.take % 2 == 0 &&
+                _rates.burn % 2 == 0,
+            "Invalid rates"
+        );
         _;
     }
 
@@ -232,7 +274,7 @@ contract Governance {
         uint256 _minVotingPeriod,
         uint16 _takeRate,
         uint16 _burnRate,
-        uint32 _minProposalStake
+        uint256 _minStake
     ) {
         require(
             _minBytes != 0 &&
@@ -240,7 +282,7 @@ contract Governance {
                 _takeRate != 0 &&
                 _burnRate != 0 &&
                 _minVotingPeriod != 0 &&
-                _minProposalStake != 0,
+                _minStake != 0,
             "Invalid input parameters"
         );
         _;
@@ -249,16 +291,17 @@ contract Governance {
     function getMinTokenStake(address _tokenAddress)
         public
         view
-        returns (uint256)
+        returns (uint256 minStake)
     {
-        Token memory token;
         for (uint16 i = 0; i < approvedTokens.length; i++) {
             if (approvedTokens[i].address_ == _tokenAddress) {
-                token = approvedTokens[i];
+                minStake = approvedTokens[i].minStake;
+                break;
             }
         }
-        return token.minStake;
     }
+
+    function mountProposal() public {}
 }
 
 contract OathFactory {
@@ -311,8 +354,8 @@ contract OathFactory {
     {
         (uint16 burn, uint16 take) = oathGov.rates();
         return (
-            _stake - (_stake * (burn / type(uint16).max)),
-            _stake * (take / type(uint16).max)
+            _stake - ((_stake * burn) / (type(uint16).max - 1)),
+            ((_stake * take) / (type(uint16).max - 1))
         );
     }
 
