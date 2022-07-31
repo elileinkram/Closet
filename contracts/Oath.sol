@@ -243,6 +243,8 @@ contract Governance {
                 _proposalConstraints.mytnConstraints.periodConstraints.min &&
                 _proposalConstraints.mytnConstraints.periodConstraints.min >
                 _proposalConstraints.mytpnConstraints.periodConstraints.min &&
+                _proposalConstraints.mytnConstraints.periodConstraints.max >
+                _proposalConstraints.mytpnConstraints.periodConstraints.max &&
                 _proposalConstraints.mytnConstraints.minStake <
                 _proposalConstraints.mytpnConstraints.minStake &&
                 _proposalConstraints.mytnConstraints.nayMultiplier >
@@ -251,20 +253,13 @@ contract Governance {
         );
         require(
             _proposalConstraints.mytnConstraints.nayMultiplier <=
-                ((type(uint16).max - 1) / 3) &&
-                _proposalConstraints.mytnConstraints.nayMultiplier % 2 == 0 &&
-                _proposalConstraints.mytpnConstraints.nayMultiplier % 2 == 0
+                (type(uint16).max / 3)
         );
         _;
     }
 
     modifier checkRates(Rates memory _rates) {
-        require(
-            (_rates.take + _rates.burn < type(uint16).max - 1) &&
-                _rates.take % 2 == 0 &&
-                _rates.burn % 2 == 0,
-            "Invalid rates"
-        );
+        require(_rates.take + _rates.burn < type(uint16).max, "Invalid rates");
         _;
     }
 
@@ -354,8 +349,8 @@ contract OathFactory {
     {
         (uint16 burn, uint16 take) = oathGov.rates();
         return (
-            _stake - ((_stake * burn) / (type(uint16).max - 1)),
-            ((_stake * take) / (type(uint16).max - 1))
+            _stake - ((_stake * burn) / type(uint16).max),
+            ((_stake * take) / type(uint16).max)
         );
     }
 
