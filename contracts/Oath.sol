@@ -105,43 +105,48 @@ contract ERC20Token is IERC20 {
 }
 
 contract Governance {
-    enum StrategyType {
-        moreYayThanNay,
-        moreYayThanPossibleNay
+    enum ProposalType {
+        PopToken,
+        Token,
+        ByteConstraints,
+        PeriodConstraints,
+        Rates,
+        PropsalConstraints
     }
 
-    struct StrategyConstraints {
-        StrategyType strategyType;
-        PeriodConstraints periodConstraints;
-        uint16 nayMultiplier;
-        uint256 minStake;
+    struct StaleProposal {
+        ProposalType proposalType;
+        uint256 id;
     }
 
     struct ProposalConstraints {
-        StrategyConstraints mytnConstraints;
-        StrategyConstraints mytpnConstraints;
+        uint16 nayMultiplier;
+        uint16 yayMultiplier;
+        uint16 minParticipationRate;
+        uint256 minStake;
+        uint256 minVotingPeriod;
+        uint256 maxVotingPeriod;
     }
 
     struct Ballot {
         uint256 yays;
         uint256 nays;
-    }
-
-    struct Vote {
-        bool vote;
-        uint256 stake;
+        uint16 yayMultiplier;
+        uint16 nayMultiplier;
+        uint16 minParticipationRate;
     }
 
     struct Proposal {
         address author;
-        mapping(address => Vote) votes;
+        ProposalType proposalType;
+        uint256 id;
+        uint256 deadline;
         Ballot ballot;
-        StrategyConstraints strategyConstraints;
-        ByteConstraints newByteConstraints;
-        PeriodConstraints newPeriodConstraints;
-        Rates newRates;
-        ProposalConstraints newProposalConstraints;
-        Token newToken;
+    }
+
+    struct PopToken {
+        address address_;
+        uint256 index;
     }
 
     struct Token {
@@ -164,6 +169,10 @@ contract Governance {
         uint16 take;
     }
 
+    StaleProposal[] staleProposals;
+
+    ProposalConstraints public proposalConstraints;
+
     OathFactory public oathFactory;
 
     ByteConstraints public byteConstraints;
@@ -174,113 +183,41 @@ contract Governance {
 
     Token[] public approvedTokens;
 
-    ProposalConstraints public proposalConstraints;
-
     ERC20Token public oathToken;
 
     Proposal[] public proposals;
 
+    PopToken[] public popTokenProps;
+
+    Token[] public tokenProps;
+
+    Rates[] public rateProps;
+
+    ProposalConstraints[] public proposalConstraintsProps;
+
+    ByteConstraints[] public byteConstraintsProps;
+
+    PeriodConstraints[] public periodConstraintsProps;
+
     constructor(
         ByteConstraints memory _byteConstraints,
         PeriodConstraints memory _periodConstraints,
-        ProposalConstraints memory _proposalConstraints,
         Rates memory _rates,
-        address[] memory _tokenAddresses,
-        uint256[] memory _tokenStakes
-    )
-        checkConstraints(
-            _byteConstraints,
-            _periodConstraints,
-            _proposalConstraints
-        )
-        checkRates(_rates)
-        onlyPositive(
-            _byteConstraints.min,
-            _periodConstraints.min,
-            _proposalConstraints.mytpnConstraints.periodConstraints.min,
-            _rates.take,
-            _rates.burn,
-            _proposalConstraints.mytnConstraints.minStake
-        )
-    {
-        _approveTokens(_tokenAddresses, _tokenStakes);
-        byteConstraints = _byteConstraints;
-        periodConstraints = _periodConstraints;
-        proposalConstraints = _proposalConstraints;
-        rates = _rates;
-        oathFactory = new OathFactory(Governance(this));
-        oathToken = new ERC20Token(msg.sender);
-    }
-
-    function _approveTokens(
-        address[] memory _tokenAddresses,
-        uint256[] memory _tokenStakes
-    ) private {
-        require(_tokenAddresses.length == _tokenStakes.length);
-        for (uint256 i = 0; i < _tokenAddresses.length; i++) {
-            require(_tokenAddresses[i] != address(0) && _tokenStakes[i] != 0);
-            approvedTokens.push(Token(_tokenAddresses[i], _tokenStakes[i]));
-            for (uint256 j = i + 1; j < _tokenAddresses.length; j++) {
-                require(
-                    _tokenAddresses[i] != _tokenAddresses[j],
-                    "Duplicate token address"
-                );
-            }
-        }
-    }
-
-    modifier checkConstraints(
-        ByteConstraints memory _byteConstraints,
-        PeriodConstraints memory _periodConstraints,
+        Token memory _token,
         ProposalConstraints memory _proposalConstraints
     ) {
-        require(
-            _byteConstraints.max > _byteConstraints.min &&
-                _periodConstraints.max > _periodConstraints.min &&
-                _proposalConstraints.mytpnConstraints.periodConstraints.max >
-                _proposalConstraints.mytpnConstraints.periodConstraints.min &&
-                _proposalConstraints.mytnConstraints.periodConstraints.max >
-                _proposalConstraints.mytnConstraints.periodConstraints.min &&
-                _proposalConstraints.mytnConstraints.periodConstraints.min >
-                _proposalConstraints.mytpnConstraints.periodConstraints.min &&
-                _proposalConstraints.mytnConstraints.periodConstraints.max >
-                _proposalConstraints.mytpnConstraints.periodConstraints.max &&
-                _proposalConstraints.mytnConstraints.minStake <
-                _proposalConstraints.mytpnConstraints.minStake &&
-                _proposalConstraints.mytnConstraints.nayMultiplier >
-                _proposalConstraints.mytpnConstraints.nayMultiplier,
-            "Invalid constraints"
-        );
-        require(
-            _proposalConstraints.mytnConstraints.nayMultiplier <=
-                (type(uint16).max / 3)
-        );
-        _;
-    }
-
-    modifier checkRates(Rates memory _rates) {
-        require(_rates.take + _rates.burn < type(uint16).max, "Invalid rates");
-        _;
-    }
-
-    modifier onlyPositive(
-        uint8 _minBytes,
-        uint256 _minLockupPeriod,
-        uint256 _minVotingPeriod,
-        uint16 _takeRate,
-        uint16 _burnRate,
-        uint256 _minStake
-    ) {
-        require(
-            _minBytes != 0 &&
-                _minLockupPeriod != 0 &&
-                _takeRate != 0 &&
-                _burnRate != 0 &&
-                _minVotingPeriod != 0 &&
-                _minStake != 0,
-            "Invalid input parameters"
-        );
-        _;
+        require(_isValidByteConstraints(_byteConstraints));
+        require(_isValidPeriodConstraints(_periodConstraints));
+        require(_isValidRates(_rates));
+        require(_isValidToken(_token));
+        require(_isValidProposalConstraints(_proposalConstraints));
+        byteConstraints = _byteConstraints;
+        periodConstraints = _periodConstraints;
+        rates = _rates;
+        approvedTokens.push(_token);
+        proposalConstraints = _proposalConstraints;
+        oathFactory = new OathFactory(Governance(this));
+        oathToken = new ERC20Token(msg.sender);
     }
 
     function getMinTokenStake(address _tokenAddress)
@@ -296,7 +233,108 @@ contract Governance {
         }
     }
 
-    function mountProposal() public {}
+    function _isValidProposalConstraints(
+        ProposalConstraints memory _proposalConstraints
+    ) private pure returns (bool) {
+        return
+            _proposalConstraints.maxVotingPeriod >
+            _proposalConstraints.minVotingPeriod;
+    }
+
+    function _isValidByteConstraints(ByteConstraints memory _byteConstraints)
+        private
+        pure
+        returns (bool)
+    {
+        return
+            _byteConstraints.max > _byteConstraints.min &&
+            _byteConstraints.min != 0;
+    }
+
+    function _isValidPeriodConstraints(
+        PeriodConstraints memory _periodConstraints
+    ) private pure returns (bool) {
+        return
+            _periodConstraints.max > _periodConstraints.min &&
+            _periodConstraints.min != 0;
+    }
+
+    function _isValidRates(Rates memory _rates) private pure returns (bool) {
+        return
+            (_rates.take + _rates.burn < type(uint16).max) &&
+            _rates.take != 0 &&
+            _rates.burn != 0;
+    }
+
+    function _isValidToken(Token memory _token) private pure returns (bool) {
+        return _token.address_ != address(0) && _token.minStake != 0;
+    }
+
+    function _generateId(ProposalType _proposalType, uint256 _defaultId)
+        private
+        returns (uint256 newId)
+    {
+        for (uint256 i = 0; i < staleProposals.length; i++) {
+            if (proposals[i].proposalType == _proposalType) {
+                newId = staleProposals[i].id;
+                staleProposals[i] = staleProposals[staleProposals.length - 1];
+                staleProposals.pop();
+                break;
+            }
+        }
+        newId = _defaultId;
+    }
+
+    function proposePopToken(
+        PopToken memory _popToken,
+        uint256 _stake,
+        uint256 _deadline
+    ) public returns (bool) {
+        require(approvedTokens[_popToken.index].address_ == _popToken.address_);
+        uint256 newId = _generateId(
+            ProposalType.PopToken,
+            popTokenProps.length
+        );
+        if (newId == popTokenProps.length) {
+            popTokenProps.push(_popToken);
+        } else {
+            popTokenProps[newId] = _popToken;
+        }
+        return _submitProposal(ProposalType.PopToken, newId, _stake, _deadline);
+    }
+
+    function _submitProposal(
+        ProposalType _proposalType,
+        uint256 _id,
+        uint256 _stake,
+        uint256 _deadline
+    ) private returns (bool) {
+        require(_stake >= proposalConstraints.minStake, "Insufficient stake");
+        uint256 duration = _deadline - block.timestamp;
+        require(
+            _deadline > block.timestamp &&
+                duration > proposalConstraints.minVotingPeriod &&
+                duration < proposalConstraints.maxVotingPeriod,
+            "Invalid voting period"
+        );
+        require(oathToken.transferFrom(msg.sender, address(this), _stake));
+        proposals.push(
+            Proposal(
+                msg.sender,
+                _proposalType,
+                _id,
+                _deadline,
+                Ballot(
+                    _stake,
+                    0,
+                    proposalConstraints.nayMultiplier,
+                    proposalConstraints.nayMultiplier,
+                    proposalConstraints.minParticipationRate
+                )
+            )
+        );
+        return true;
+    }
 }
 
 contract OathFactory {
@@ -310,13 +348,19 @@ contract OathFactory {
     struct Payout {
         address recipient;
         uint256 amount;
-        uint256 tax;
+    }
+
+    struct ByteConstraints {
+        uint8 min;
+        uint8 max;
     }
 
     struct Oath {
+        uint256 serviceFee;
         uint256 deadline;
         Stake stake;
         Payout payout;
+        ByteConstraints byteConstraints;
     }
 
     Governance public oathGov;
@@ -360,24 +404,31 @@ contract OathFactory {
         uint256 _deadline,
         address _token
     ) public returns (bool) {
-        require(_token != address(0));
         uint256 minStake = oathGov.getMinTokenStake(_token);
         require(minStake != 0, "Token not found");
         require(_stake >= minStake);
-        (uint256 amount, uint256 tax) = _calculatePayout(_stake);
+        (uint256 payoutAmount, uint256 serviceFee) = _calculatePayout(_stake);
+        require(payoutAmount > serviceFee);
+        (uint8 min, uint8 max) = oathGov.byteConstraints();
         Oath memory oath = Oath(
+            serviceFee,
             _deadline,
             Stake(_token, msg.sender, _stake, true),
-            Payout(address(0), amount, tax)
+            Payout(address(0), payoutAmount),
+            ByteConstraints(min, max)
         );
         return _lock(_hash, oath);
     }
 
     function _lock(bytes32 _hash, Oath memory _oath) private returns (bool) {
-        require(_oath.deadline > block.timestamp);
         uint256 duration = _oath.deadline - block.timestamp;
         (uint256 min, uint256 max) = oathGov.periodConstraints();
-        require(duration >= min && duration <= max);
+        require(
+            _oath.deadline > block.timestamp &&
+                duration >= min &&
+                duration <= max,
+            "Beyond time range"
+        );
         require(_oath.stake.staker == address(0), "Oath taken");
         oaths[_hash] = _oath;
         emit Locked(_oath.stake.staker, _oath.stake.amount, _hash);
@@ -401,11 +452,8 @@ contract OathFactory {
         require(
             IERC20(oath.stake.token).transfer(
                 oath.payout.recipient,
-                oath.payout.amount - oath.payout.tax
+                oath.payout.amount
             )
-        );
-        require(
-            IERC20(oath.stake.token).transfer(address(oathGov), oath.payout.tax)
         );
         return true;
     }
@@ -414,12 +462,15 @@ contract OathFactory {
         public
         returns (bool)
     {
-        uint256 byteSize = bytes(_secret).length;
-        (uint8 min, uint8 max) = oathGov.byteConstraints();
-        require(byteSize >= min && byteSize <= max, "Beyond byte range");
         bytes32 hash = keccak256(abi.encodePacked(_secret));
         require(hash == _hash, "Invalid secret or hash");
         Oath storage oath = oaths[_hash];
+        uint256 byteSize = bytes(_secret).length;
+        ByteConstraints storage byteConstraints = oath.byteConstraints;
+        require(
+            byteSize >= byteConstraints.min && byteSize <= byteConstraints.max,
+            "Beyond byte range"
+        );
         return _unlock(_hash, oath);
     }
 
@@ -429,15 +480,17 @@ contract OathFactory {
         returns (bool)
     {
         require(oath.payout.recipient == address(0), "Secret was cracked");
-        require(block.timestamp >= oath.deadline);
-        require(oath.stake.locked);
+        require(block.timestamp >= oath.deadline && oath.stake.locked);
         oath.stake.locked = false;
         emit Unlocked(oath.stake.staker, _hash);
         require(
             IERC20(oath.stake.token).transfer(
                 oath.stake.staker,
-                oath.stake.amount
+                oath.stake.amount - oath.serviceFee
             )
+        );
+        require(
+            IERC20(oath.stake.token).transfer(address(oathGov), oath.serviceFee)
         );
         return true;
     }
