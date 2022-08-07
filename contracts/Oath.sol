@@ -42,7 +42,7 @@ contract Governance is IERC20 {
         uint256 value
     );
 
-    event Unelected(
+    event Recalled(
         address indexed owner,
         address indexed account,
         uint256 value
@@ -266,21 +266,15 @@ contract Governance is IERC20 {
         return _token.address_ != address(0) && _token.minStake != 0;
     }
 
-    function electDelegate(address _delegate, uint256 amount)
-        public
-        returns (bool)
-    {
+    function elect(address _delegate, uint256 amount) public returns (bool) {
         delegateVotes[msg.sender][_delegate] = amount;
         emit Elected(msg.sender, _delegate, amount);
         return true;
     }
 
-    function recallDelegate(address _delegate, uint256 amount)
-        public
-        returns (bool)
-    {
+    function recall(address _delegate, uint256 amount) public returns (bool) {
         delegateVotes[msg.sender][_delegate] -= amount;
-        emit Unelected(msg.sender, _delegate, amount);
+        emit Recalled(msg.sender, _delegate, amount);
         return true;
     }
 
