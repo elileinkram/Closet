@@ -105,48 +105,22 @@ contract ERC20Token is IERC20 {
 }
 
 contract Governance {
-    enum ProposalType {
-        PopToken,
-        Token,
+    enum Update {
+        Provision,
         ByteConstraints,
         PeriodConstraints,
-        Rates,
-        PropsalConstraints
+        Rates
     }
 
-    struct StaleProposal {
-        ProposalType proposalType;
-        uint256 id;
+    struct Provider {
+        address account;
+        uint256 amount;
     }
 
-    struct ProposalConstraints {
-        uint16 nayMultiplier;
-        uint16 yayMultiplier;
-        uint16 minParticipationRate;
-        uint256 minStake;
-        uint256 minVotingPeriod;
-        uint256 maxVotingPeriod;
-    }
-
-    struct Ballot {
-        uint256 yays;
-        uint256 nays;
-        uint16 yayMultiplier;
-        uint16 nayMultiplier;
-        uint16 minParticipationRate;
-    }
-
-    struct Proposal {
-        address author;
-        ProposalType proposalType;
-        uint256 id;
-        uint256 deadline;
-        Ballot ballot;
-    }
-
-    struct PopToken {
-        address address_;
-        uint256 index;
+    struct Pool {
+        uint256 liquidity;
+        Provider[] providers;
+        uint256[] lanes;
     }
 
     struct Token {
@@ -165,15 +139,11 @@ contract Governance {
     }
 
     struct Rates {
-        uint16 burn;
         uint16 take;
+        uint16 burn;
     }
 
-    StaleProposal[] staleProposals;
-
-    ProposalConstraints public proposalConstraints;
-
-    OathFactory public oathFactory;
+    mapping(bytes32 => Pool) public votingPools;
 
     ByteConstraints public byteConstraints;
 
@@ -183,62 +153,56 @@ contract Governance {
 
     Token[] public approvedTokens;
 
+    uint256 public minProvision;
+
     ERC20Token public oathToken;
 
-    Proposal[] public proposals;
-
-    PopToken[] public popTokenProps;
-
-    Token[] public tokenProps;
-
-    Rates[] public rateProps;
-
-    ProposalConstraints[] public proposalConstraintsProps;
-
-    ByteConstraints[] public byteConstraintsProps;
-
-    PeriodConstraints[] public periodConstraintsProps;
+    OathFactory public oathFactory;
 
     constructor(
         ByteConstraints memory _byteConstraints,
         PeriodConstraints memory _periodConstraints,
         Rates memory _rates,
-        Token memory _token,
-        ProposalConstraints memory _proposalConstraints
+        address[] memory _tokens,
+        uint256[] memory _stakes,
+        uint256 _minProvision
     ) {
         require(_isValidByteConstraints(_byteConstraints));
         require(_isValidPeriodConstraints(_periodConstraints));
         require(_isValidRates(_rates));
-        require(_isValidToken(_token));
-        require(_isValidProposalConstraints(_proposalConstraints));
+        require(_minProvision != 0);
+        require(_tokens.length == _stakes.length);
         byteConstraints = _byteConstraints;
         periodConstraints = _periodConstraints;
         rates = _rates;
-        approvedTokens.push(_token);
-        proposalConstraints = _proposalConstraints;
-        oathFactory = new OathFactory(Governance(this));
+        minProvision = _minProvision;
+        for (uint256 i = 0; i < _tokens.length; i++) {
+            approvedTokens.push(Token(_tokens[i], _stakes[i]));
+            require(_isValidToken(approvedTokens[i], _tokens, i + 1));
+        }
         oathToken = new ERC20Token(msg.sender);
+        oathFactory = new OathFactory(Governance(this));
     }
 
-    function getMinTokenStake(address _tokenAddress)
+    function findToken(address _address)
         public
         view
-        returns (uint256 minStake)
+        returns (
+            uint256,
+            address,
+            uint256
+        )
     {
-        for (uint16 i = 0; i < approvedTokens.length; i++) {
-            if (approvedTokens[i].address_ == _tokenAddress) {
-                minStake = approvedTokens[i].minStake;
-                break;
+        for (uint256 i = 0; i < approvedTokens.length; i++) {
+            if (approvedTokens[i].address_ == _address) {
+                return (
+                    i,
+                    approvedTokens[i].address_,
+                    approvedTokens[i].minStake
+                );
             }
         }
-    }
-
-    function _isValidProposalConstraints(
-        ProposalConstraints memory _proposalConstraints
-    ) private pure returns (bool) {
-        return
-            _proposalConstraints.maxVotingPeriod >
-            _proposalConstraints.minVotingPeriod;
+        return (0, address(0), 0);
     }
 
     function _isValidByteConstraints(ByteConstraints memory _byteConstraints)
@@ -266,72 +230,131 @@ contract Governance {
             _rates.burn != 0;
     }
 
-    function _isValidToken(Token memory _token) private pure returns (bool) {
+    function _isValidToken(
+        Token memory _token,
+        address[] memory _checkAgainst,
+        uint256 _i
+    ) private pure returns (bool) {
+        for (uint256 i = _i; i < _checkAgainst.length; i++) {
+            if (_token.address_ == _checkAgainst[i]) return false;
+        }
         return _token.address_ != address(0) && _token.minStake != 0;
     }
 
-    function _generateId(ProposalType _proposalType, uint256 _defaultId)
-        private
-        returns (uint256 newId)
-    {
-        for (uint256 i = 0; i < staleProposals.length; i++) {
-            if (proposals[i].proposalType == _proposalType) {
-                newId = staleProposals[i].id;
-                staleProposals[i] = staleProposals[staleProposals.length - 1];
-                staleProposals.pop();
-                break;
+    function castVote(
+        bytes32 _id,
+        uint256 _amount,
+        uint256 _index
+    ) public returns (bool) {
+        require(
+            _amount >= minProvision &&
+                oathToken.transferFrom(msg.sender, address(this), _amount)
+        );
+        votingPools[_id].liquidity += _amount;
+        if (_index != 0) {
+            require(
+                _index <= votingPools[_id].providers.length &&
+                    votingPools[_id].providers[_index - 1].account == msg.sender
+            );
+            votingPools[_id].providers[_index - 1].amount += _amount;
+        } else {
+            uint256 length = votingPools[_id].lanes.length;
+            if (length == 0) {
+                votingPools[_id].providers.push(Provider(msg.sender, _amount));
+            } else {
+                votingPools[_id].providers[
+                    votingPools[_id].lanes[0]
+                ] = Provider(msg.sender, _amount);
+                votingPools[_id].lanes[0] = votingPools[_id].lanes[length - 1];
+                votingPools[_id].lanes.pop();
             }
         }
-        newId = _defaultId;
+        return true;
     }
 
-    function proposePopToken(
-        PopToken memory _popToken,
-        uint256 _stake,
-        uint256 _deadline
+    function unwindPosition(
+        bytes32 _id,
+        uint256 _amount,
+        uint256 _index
     ) public returns (bool) {
-        require(approvedTokens[_popToken.index].address_ == _popToken.address_);
-        uint256 newId = _generateId(
-            ProposalType.PopToken,
-            popTokenProps.length
-        );
-        if (newId == popTokenProps.length) {
-            popTokenProps.push(_popToken);
-        } else {
-            popTokenProps[newId] = _popToken;
+        require(_amount != 0 && _index < votingPools[_id].providers.length);
+        Provider storage provider = votingPools[_id].providers[_index];
+        require(_amount <= provider.amount && msg.sender == provider.account);
+        provider.amount -= _amount;
+        votingPools[_id].liquidity -= _amount;
+        require(oathToken.transferFrom(address(this), msg.sender, _amount));
+        if (provider.amount == 0) {
+            delete votingPools[_id].providers[_index];
+            votingPools[_id].lanes.push(_index);
         }
-        return _submitProposal(ProposalType.PopToken, newId, _stake, _deadline);
+        return true;
     }
 
-    function _submitProposal(
-        ProposalType _proposalType,
-        uint256 _id,
-        uint256 _stake,
-        uint256 _deadline
-    ) private returns (bool) {
-        require(_stake >= proposalConstraints.minStake, "Insufficient stake");
-        uint256 duration = _deadline - block.timestamp;
+    function proposeBoundaryUpdate(
+        uint256 _num1,
+        uint256 _num2,
+        Update _update
+    ) public returns (bool) {
+        bytes32 newId;
+        bytes32 oldId;
+        if (_update == Update.Rates) {
+            oldId = keccak256(abi.encode("rts", rates));
+            rates = Rates(uint8(_num1), uint8(_num2));
+            require(_isValidRates(rates));
+            newId = keccak256(abi.encode("rts", rates));
+        } else if (_update == Update.Provision) {
+            oldId = keccak256(abi.encode("mpv", minProvision));
+            minProvision = _num1;
+            require(minProvision != 0);
+            newId = keccak256(abi.encode("mpv", minProvision));
+        } else if (_update == Update.PeriodConstraints) {
+            oldId = keccak256(abi.encode("pcs", periodConstraints));
+            periodConstraints = PeriodConstraints(_num1, _num2);
+            require(_isValidPeriodConstraints(periodConstraints));
+            newId = keccak256(abi.encode("pcs", periodConstraints));
+        } else if (_update == Update.ByteConstraints) {
+            oldId = keccak256(abi.encode("bcs", byteConstraints));
+            byteConstraints = ByteConstraints(uint8(_num1), uint8(_num2));
+            require(_isValidByteConstraints(byteConstraints));
+            newId = keccak256(abi.encode("bcs", byteConstraints));
+        }
         require(
-            _deadline > block.timestamp &&
-                duration > proposalConstraints.minVotingPeriod &&
-                duration < proposalConstraints.maxVotingPeriod,
-            "Invalid voting period"
+            newId != "" &&
+                votingPools[newId].liquidity > votingPools[oldId].liquidity,
+            "Insufficient liquidity"
         );
-        require(oathToken.transferFrom(msg.sender, address(this), _stake));
-        proposals.push(
-            Proposal(
-                msg.sender,
-                _proposalType,
-                _id,
-                _deadline,
-                Ballot(
-                    _stake,
-                    0,
-                    proposalConstraints.nayMultiplier,
-                    proposalConstraints.nayMultiplier,
-                    proposalConstraints.minParticipationRate
-                )
-            )
+        return true;
+    }
+
+    function proposeTokenUpdate(
+        address[] memory _tokens,
+        uint256[] memory _stakes
+    ) public returns (bool) {
+        require(_tokens.length == _stakes.length);
+        bytes32 oldId = keccak256(abi.encode(approvedTokens));
+        uint256 i = 0;
+        if (_tokens.length > approvedTokens.length) {
+            for (i; i < approvedTokens.length; i++) {
+                approvedTokens[i] = Token(_tokens[i], _stakes[i]);
+                require(_isValidToken(approvedTokens[i], _tokens, i + 1));
+            }
+            for (i; i < _tokens.length; i++) {
+                approvedTokens.push(Token(_tokens[i], _stakes[i]));
+                require(_isValidToken(approvedTokens[i], _tokens, i + 1));
+            }
+        } else {
+            for (i; i < _tokens.length; i++) {
+                approvedTokens[i] = Token(_tokens[i], _stakes[i]);
+                require(_isValidToken(approvedTokens[i], _tokens, i + 1));
+            }
+            for (i; i < approvedTokens.length; i++) {
+                approvedTokens.pop();
+            }
+        }
+        bytes32 newId = keccak256(abi.encode(approvedTokens));
+        require(
+            votingPools[newId].liquidity > votingPools[oldId].liquidity,
+            "Insufficient liquidity"
         );
         return true;
     }
@@ -404,7 +427,7 @@ contract OathFactory {
         uint256 _deadline,
         address _token
     ) public returns (bool) {
-        uint256 minStake = oathGov.getMinTokenStake(_token);
+        (, , uint256 minStake) = oathGov.findToken(_token);
         require(minStake != 0, "Token not found");
         require(_stake >= minStake);
         (uint256 payoutAmount, uint256 serviceFee) = _calculatePayout(_stake);
