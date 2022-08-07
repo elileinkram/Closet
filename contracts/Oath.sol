@@ -552,21 +552,19 @@ contract OathFactory {
         require(minStake != 0, "Token not found");
         require(_stake >= minStake);
         (uint256 payoutAmount, uint256 serviceFee) = _calculatePayout(_stake);
-        require(
-            payoutAmount != 0 && serviceFee != 0 && payoutAmount > serviceFee
-        );
+        require(serviceFee != 0 && payoutAmount > serviceFee);
         (uint8 min, uint8 max) = oathGov.byteConstraints();
-        Oath memory oath = Oath(
+        oaths[_hash] = Oath(
             serviceFee,
             _deadline,
             Stake(_token, msg.sender, _stake, true),
             Payout(address(0), payoutAmount),
             ByteConstraints(min, max)
         );
-        return _lock(_hash, oath);
+        return _lock(_hash, oaths[_hash]);
     }
 
-    function _lock(bytes32 _hash, Oath memory _oath) private returns (bool) {
+    function _lock(bytes32 _hash, Oath storage _oath) private returns (bool) {
         uint256 duration = _oath.deadline - block.timestamp;
         (uint256 min, uint256 max) = oathGov.periodConstraints();
         require(
@@ -576,7 +574,6 @@ contract OathFactory {
             "Beyond time range"
         );
         require(_oath.stake.staker == address(0), "Oath taken");
-        oaths[_hash] = _oath;
         emit Locked(_oath.stake.staker, _oath.stake.amount, _hash);
         require(
             IERC20(_oath.stake.token).transferFrom(
