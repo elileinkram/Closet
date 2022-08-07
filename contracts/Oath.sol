@@ -30,13 +30,30 @@ interface IERC20 {
     ) external returns (bool);
 }
 
-contract ERC20Token is IERC20 {
+contract Governance is IERC20 {
     struct Transaction {
-        address buyer;
-        address seller;
-        uint256 amount;
+        uint256 balance;
         uint256 timestamp;
     }
+
+    event Elected(
+        address indexed owner,
+        address indexed account,
+        uint256 value
+    );
+
+    event Unelected(
+        address indexed owner,
+        address indexed account,
+        uint256 value
+    );
+
+    event Appointed(
+        address indexed owner,
+        address indexed account,
+        bytes32 id,
+        uint256 index
+    );
 
     string public constant name = "Oath";
 
@@ -50,9 +67,9 @@ contract ERC20Token is IERC20 {
 
     mapping(address => mapping(address => uint256)) allowed;
 
-    constructor(address account) {
-        balances[account] = totalSupply;
-    }
+    mapping(address => mapping(address => uint256)) public delegateVotes;
+
+    mapping(address => Transaction[]) public transactionHistory;
 
     function balanceOf(address account) public view override returns (uint256) {
         return balances[account];
@@ -66,6 +83,10 @@ contract ERC20Token is IERC20 {
         require(amount <= balances[msg.sender]);
         balances[msg.sender] -= amount;
         balances[to] += amount;
+        transactionHistory[msg.sender].push(
+            Transaction(balances[msg.sender], block.timestamp)
+        );
+        transactionHistory[to].push(Transaction(balances[to], block.timestamp));
         emit Transfer(msg.sender, to, amount);
         return true;
     }
@@ -99,12 +120,14 @@ contract ERC20Token is IERC20 {
         balances[from] -= amount;
         allowed[from][msg.sender] -= amount;
         balances[to] += amount;
+        transactionHistory[from].push(
+            Transaction(balances[from], block.timestamp)
+        );
+        transactionHistory[to].push(Transaction(balances[to], block.timestamp));
         emit Transfer(from, to, amount);
         return true;
     }
-}
 
-contract Governance {
     enum Update {
         Provision,
         ByteConstraints,
@@ -114,6 +137,7 @@ contract Governance {
 
     struct Provider {
         address account;
+        address manager;
         uint256 amount;
     }
 
@@ -155,8 +179,6 @@ contract Governance {
 
     uint256 public minProvision;
 
-    ERC20Token public oathToken;
-
     OathFactory public oathFactory;
 
     constructor(
@@ -172,6 +194,10 @@ contract Governance {
         require(_isValidRates(_rates));
         require(_minProvision != 0);
         require(_tokens.length == _stakes.length);
+        balances[msg.sender] = totalSupply;
+        transactionHistory[msg.sender].push(
+            Transaction(totalSupply, block.timestamp)
+        );
         byteConstraints = _byteConstraints;
         periodConstraints = _periodConstraints;
         rates = _rates;
@@ -180,7 +206,6 @@ contract Governance {
             approvedTokens.push(Token(_tokens[i], _stakes[i]));
             require(_isValidToken(approvedTokens[i], _tokens, i + 1));
         }
-        oathToken = new ERC20Token(msg.sender);
         oathFactory = new OathFactory(Governance(this));
     }
 
@@ -241,30 +266,64 @@ contract Governance {
         return _token.address_ != address(0) && _token.minStake != 0;
     }
 
+    function electDelegate(address _delegate, uint256 amount)
+        public
+        returns (bool)
+    {
+        delegateVotes[msg.sender][_delegate] = amount;
+        emit Elected(msg.sender, _delegate, amount);
+        return true;
+    }
+
+    function recallDelegate(address _delegate, uint256 amount)
+        public
+        returns (bool)
+    {
+        delegateVotes[msg.sender][_delegate] -= amount;
+        emit Unelected(msg.sender, _delegate, amount);
+        return true;
+    }
+
+    function appointManager(
+        bytes32 _id,
+        uint256 _index,
+        address _manager
+    ) public returns (bool) {
+        require(votingPools[_id].providers[_index].account == msg.sender);
+        votingPools[_id].providers[_index].manager = _manager;
+        emit Appointed(msg.sender, _manager, _id, _index);
+        return true;
+    }
+
     function castVote(
+        address _from,
         bytes32 _id,
         uint256 _amount,
         uint256 _index
     ) public returns (bool) {
-        require(
-            _amount >= minProvision &&
-                oathToken.transferFrom(msg.sender, address(this), _amount)
-        );
+        require(_amount >= minProvision && balances[_from] >= _amount);
+        if (_from != msg.sender) {
+            require(delegateVotes[_from][msg.sender] >= _amount);
+            delegateVotes[_from][msg.sender] -= _amount;
+        }
+        balances[_from] -= _amount;
         votingPools[_id].liquidity += _amount;
         if (_index != 0) {
             require(
                 _index <= votingPools[_id].providers.length &&
-                    votingPools[_id].providers[_index - 1].account == msg.sender
+                    votingPools[_id].providers[_index - 1].account == _from
             );
             votingPools[_id].providers[_index - 1].amount += _amount;
         } else {
             uint256 length = votingPools[_id].lanes.length;
             if (length == 0) {
-                votingPools[_id].providers.push(Provider(msg.sender, _amount));
+                votingPools[_id].providers.push(
+                    Provider(_from, msg.sender, _amount)
+                );
             } else {
                 votingPools[_id].providers[
                     votingPools[_id].lanes[0]
-                ] = Provider(msg.sender, _amount);
+                ] = Provider(_from, msg.sender, _amount);
                 votingPools[_id].lanes[0] = votingPools[_id].lanes[length - 1];
                 votingPools[_id].lanes.pop();
             }
@@ -279,10 +338,14 @@ contract Governance {
     ) public returns (bool) {
         require(_amount != 0 && _index < votingPools[_id].providers.length);
         Provider storage provider = votingPools[_id].providers[_index];
-        require(_amount <= provider.amount && msg.sender == provider.account);
+        require(_amount <= provider.amount);
+        if (msg.sender != provider.account) {
+            require(msg.sender == provider.manager);
+            delegateVotes[provider.account][msg.sender] += _amount;
+        }
         provider.amount -= _amount;
         votingPools[_id].liquidity -= _amount;
-        require(oathToken.transferFrom(address(this), msg.sender, _amount));
+        balances[provider.account] += _amount;
         if (provider.amount == 0) {
             delete votingPools[_id].providers[_index];
             votingPools[_id].lanes.push(_index);
@@ -404,11 +467,6 @@ contract OathFactory {
 
     event Cracked(address indexed _account, bytes32 indexed _hash);
 
-    modifier onlyOwner(address _account) {
-        require(_account == msg.sender, "Unauthorized");
-        _;
-    }
-
     function _calculatePayout(uint256 _stake)
         private
         view
@@ -497,11 +555,8 @@ contract OathFactory {
         return _unlock(_hash, oath);
     }
 
-    function _unlock(bytes32 _hash, Oath storage oath)
-        private
-        onlyOwner(oath.stake.staker)
-        returns (bool)
-    {
+    function _unlock(bytes32 _hash, Oath storage oath) private returns (bool) {
+        require(oath.stake.staker == msg.sender, "Unauthorized");
         require(oath.payout.recipient == address(0), "Secret was cracked");
         require(block.timestamp >= oath.deadline && oath.stake.locked);
         oath.stake.locked = false;
