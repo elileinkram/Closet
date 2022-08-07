@@ -267,12 +267,14 @@ contract Governance is IERC20 {
     }
 
     function elect(address _delegate, uint256 amount) public returns (bool) {
+        require(amount != 0);
         delegateVotes[msg.sender][_delegate] = amount;
         emit Elected(msg.sender, _delegate, amount);
         return true;
     }
 
     function recall(address _delegate, uint256 amount) public returns (bool) {
+        require(amount <= delegateVotes[msg.sender][_delegate]);
         delegateVotes[msg.sender][_delegate] -= amount;
         emit Recalled(msg.sender, _delegate, amount);
         return true;
