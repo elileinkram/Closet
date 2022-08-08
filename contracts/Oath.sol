@@ -128,19 +128,17 @@ contract OathToken is IERC20 {
     function latestBalance(
         address _owner,
         uint256 _searchFrom,
-        uint256 _deadline
+        uint256 _until
     ) public view returns (uint256) {
         require(_searchFrom < transactionHistory[_owner].length);
-        require(transactionHistory[_owner][_searchFrom].timestamp < _deadline);
+        require(transactionHistory[_owner][_searchFrom].timestamp < _until);
         uint256 i = _searchFrom + 1;
         for (i; i < transactionHistory[_owner].length; i++) {
-            if (
-                transactionHistory[_owner][_searchFrom].timestamp >= _deadline
-            ) {
+            if (transactionHistory[_owner][i].timestamp >= _until) {
                 break;
             }
         }
-        return transactionHistory[_owner][_searchFrom - 1].balance;
+        return transactionHistory[_owner][i - 1].balance;
     }
 }
 
@@ -152,7 +150,7 @@ contract OathGov {
         uint256 amount
     );
 
-    event Loosened(
+    event Retreated(
         address indexed owner,
         address indexed delegate,
         bytes32 indexed id,
@@ -178,15 +176,15 @@ contract OathGov {
         uint256 index
     );
 
-    event UpdatedProtocol(
-        UpdateType indexed updateType,
+    event StateChanged(
+        State indexed state,
         bytes32 indexed oldId,
         bytes32 indexed newId
     );
 
-    event DividendReceived(address indexed owner, bytes32 indexed id);
+    event Rewarded(address indexed owner, bytes32 indexed id, uint256 amount);
 
-    enum UpdateType {
+    enum State {
         Token,
         Provision,
         ByteConstraints,
@@ -350,6 +348,7 @@ contract OathGov {
         address _manager
     ) public returns (bool) {
         require(votingPools[_id].providers[_index].account == msg.sender);
+        require(_manager != address(0));
         votingPools[_id].providers[_index].manager = _manager;
         emit Appointed(msg.sender, _manager, _id, _index);
         return true;
@@ -420,6 +419,8 @@ contract OathGov {
         require(_amount != 0 && _index < votingPools[_id].providers.length);
         Provider storage provider = votingPools[_id].providers[_index];
         require(_amount <= provider.amount);
+        provider.amount -= _amount;
+        votingPools[_id].liquidity -= _amount;
         if (msg.sender != provider.account) {
             require(msg.sender == provider.manager);
             delegateVotes[provider.account][msg.sender] += _amount;
@@ -428,39 +429,37 @@ contract OathGov {
             provider.account,
             oathToken.balanceOf(provider.account) + _amount
         );
-        provider.amount -= _amount;
-        votingPools[_id].liquidity -= _amount;
         if (provider.amount == 0) {
             delete votingPools[_id].providers[_index];
             votingPools[_id].lanes.push(_index);
         }
-        emit Loosened(provider.account, msg.sender, _id, _amount);
+        emit Retreated(provider.account, msg.sender, _id, _amount);
         return true;
     }
 
-    function proposeBoundaryUpdateType(
+    function changeBoundaryState(
         uint256 _num1,
         uint256 _num2,
-        UpdateType _update
+        State _state
     ) public returns (bool) {
-        bytes32 newId;
         bytes32 oldId;
-        if (_update == UpdateType.Rates) {
+        bytes32 newId;
+        if (_state == State.Rates) {
             oldId = keccak256(abi.encode("rts", rates));
             rates = Rates(uint16(_num1), uint16(_num2));
             require(_isValidRates(rates));
             newId = keccak256(abi.encode("rts", rates));
-        } else if (_update == UpdateType.Provision) {
+        } else if (_state == State.Provision) {
             oldId = keccak256(abi.encode("mpv", minProvision));
             minProvision = _num1;
             require(minProvision != 0);
             newId = keccak256(abi.encode("mpv", minProvision));
-        } else if (_update == UpdateType.PeriodConstraints) {
+        } else if (_state == State.PeriodConstraints) {
             oldId = keccak256(abi.encode("pcs", periodConstraints));
             periodConstraints = PeriodConstraints(_num1, _num2);
             require(_isValidPeriodConstraints(periodConstraints));
             newId = keccak256(abi.encode("pcs", periodConstraints));
-        } else if (_update == UpdateType.ByteConstraints) {
+        } else if (_state == State.ByteConstraints) {
             oldId = keccak256(abi.encode("bcs", byteConstraints));
             byteConstraints = ByteConstraints(uint8(_num1), uint8(_num2));
             require(_isValidByteConstraints(byteConstraints));
@@ -471,11 +470,11 @@ contract OathGov {
                 votingPools[newId].liquidity > votingPools[oldId].liquidity,
             "Insufficient liquidity"
         );
-        emit UpdatedProtocol(_update, oldId, newId);
+        emit StateChanged(_state, oldId, newId);
         return true;
     }
 
-    function proposeTokenUpdateType(
+    function proposeTokenState(
         address[] memory _tokens,
         uint256[] memory _stakes
     ) public returns (bool) {
@@ -505,11 +504,11 @@ contract OathGov {
             votingPools[newId].liquidity > votingPools[oldId].liquidity,
             "Insufficient liquidity"
         );
-        emit UpdatedProtocol(UpdateType.Token, oldId, newId);
+        emit StateChanged(State.Token, oldId, newId);
         return true;
     }
 
-    function receiveDividend(
+    function claimReward(
         address _owner,
         bytes32 _id,
         uint256 _searchFrom
@@ -527,11 +526,10 @@ contract OathGov {
             _searchFrom,
             deadline
         );
-        require(balance != 0);
-        uint256 dividend = (serviceFee * balance) / oathToken.totalSupply();
-        require(dividend != 0);
-        require(IERC20(token).transfer(_owner, dividend));
-        emit DividendReceived(_owner, _id);
+        uint256 reward = (serviceFee * balance) / oathToken.totalSupply();
+        require(reward != 0);
+        require(IERC20(token).transfer(_owner, reward));
+        emit Rewarded(_owner, _id, reward);
         return true;
     }
 }
@@ -602,7 +600,7 @@ contract OathFactory {
         );
     }
 
-    function _calculatePayout(uint256 _stake)
+    function _calculateOutflows(uint256 _stake)
         private
         view
         returns (uint256, uint256)
@@ -621,43 +619,27 @@ contract OathFactory {
         address _token
     ) public returns (bool) {
         uint256 minStake = oathGov.minStakeOf(_token);
-        require(minStake != 0, "Token not found");
-        require(_stake >= minStake);
-        (uint256 payoutAmount, uint256 serviceFee) = _calculatePayout(_stake);
+        require(minStake != 0 && _stake >= minStake);
+        (uint256 payoutAmount, uint256 serviceFee) = _calculateOutflows(_stake);
         require(serviceFee != 0 && payoutAmount > serviceFee);
-        (uint8 min, uint8 max) = oathGov.byteConstraints();
+        (uint8 minBytes, uint8 maxBytes) = oathGov.byteConstraints();
+        require(oaths[_hash].stake.staker == address(0));
         oaths[_hash] = Oath(
             serviceFee,
             _deadline,
             Stake(_token, msg.sender, _stake, true),
             Payout(address(0), payoutAmount),
-            ByteConstraints(min, max)
+            ByteConstraints(minBytes, maxBytes)
         );
-        emit Locked(
-            oaths[_hash].stake.staker,
-            oaths[_hash].stake.amount,
-            _hash
-        );
-        return _lock(oaths[_hash]);
-    }
-
-    function _lock(Oath storage _oath) private returns (bool) {
-        uint256 duration = _oath.deadline - block.timestamp;
-        (uint256 min, uint256 max) = oathGov.periodConstraints();
+        uint256 duration = _deadline - block.timestamp;
+        (uint256 minPeriod, uint256 maxPeriod) = oathGov.periodConstraints();
         require(
-            _oath.deadline > block.timestamp &&
-                duration >= min &&
-                duration <= max,
-            "Beyond time range"
+            _deadline > block.timestamp &&
+                duration >= minPeriod &&
+                duration <= maxPeriod
         );
-        require(_oath.stake.staker == address(0), "Oath taken");
-        require(
-            IERC20(_oath.stake.token).transferFrom(
-                _oath.stake.staker,
-                address(this),
-                _oath.stake.amount
-            )
-        );
+        require(IERC20(_token).transferFrom(msg.sender, address(this), _stake));
+        emit Locked(msg.sender, _stake, _hash);
         return true;
     }
 
@@ -669,10 +651,7 @@ contract OathFactory {
         oath.payout.recipient = msg.sender;
         emit Cracked(oath.payout.recipient, hash, _secret);
         require(
-            IERC20(oath.stake.token).transfer(
-                oath.payout.recipient,
-                oath.payout.amount
-            )
+            IERC20(oath.stake.token).transfer(msg.sender, oath.payout.amount)
         );
         return true;
     }
@@ -687,27 +666,23 @@ contract OathFactory {
         uint256 byteSize = bytes(_secret).length;
         ByteConstraints storage byteConstraints = oath.byteConstraints;
         require(
-            byteSize >= byteConstraints.min && byteSize <= byteConstraints.max,
-            "Beyond byte range"
+            byteSize >= byteConstraints.min && byteSize <= byteConstraints.max
         );
-        emit Unlocked(oath.stake.staker, _hash, _secret);
-        return _unlock(oath);
-    }
-
-    function _unlock(Oath storage oath) private returns (bool) {
         require(oath.stake.staker == msg.sender, "Unauthorized");
         require(oath.payout.recipient == address(0), "Secret was cracked");
         require(block.timestamp >= oath.deadline && oath.stake.locked);
         oath.stake.locked = false;
         require(
             IERC20(oath.stake.token).transfer(
-                oath.stake.staker,
+                msg.sender,
                 oath.stake.amount - oath.serviceFee
             )
         );
         require(
             IERC20(oath.stake.token).transfer(address(oathGov), oath.serviceFee)
         );
+        emit Unlocked(oath.stake.staker, _hash, _secret);
+
         return true;
     }
 }
