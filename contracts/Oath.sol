@@ -31,6 +31,8 @@ interface IERC20 {
 }
 
 contract OathToken is IERC20 {
+    event Rebalanced(address indexed account, uint256 value);
+
     string public constant name = "Oath";
 
     string public constant symbol = "OATH";
@@ -39,7 +41,7 @@ contract OathToken is IERC20 {
 
     uint256 public constant totalSupply = 100000000000;
 
-    mapping(address => uint256) balances;
+    mapping(address => uint256) private balances;
 
     mapping(address => mapping(address => uint256)) allowed;
 
@@ -51,8 +53,6 @@ contract OathToken is IERC20 {
     mapping(address => Transaction[]) public transactionHistory;
 
     OathGov public oathGov;
-
-    event Rebalanced(address indexed account, uint256 value);
 
     constructor(address _account) {
         balances[_account] = totalSupply;
@@ -119,14 +119,10 @@ contract OathToken is IERC20 {
         return true;
     }
 
-    function rebalance(address _account, uint256 balance)
-        public
-        returns (bool)
-    {
+    function rebalance(address _account, uint256 balance) public {
         require(msg.sender == address(oathGov));
         balances[_account] = balance;
         emit Rebalanced(_account, balance);
-        return true;
     }
 
     function latestBalance(
@@ -149,13 +145,27 @@ contract OathToken is IERC20 {
 }
 
 contract OathGov {
-    event DelegateElected(
+    event Voted(
+        address indexed owner,
+        address indexed delegate,
+        bytes32 indexed id,
+        uint256 amount
+    );
+
+    event Loosened(
+        address indexed owner,
+        address indexed delegate,
+        bytes32 indexed id,
+        uint256 amount
+    );
+
+    event Delegated(
         address indexed owner,
         address indexed account,
         uint256 value
     );
 
-    event DelegateRecalled(
+    event Decommissioned(
         address indexed owner,
         address indexed account,
         uint256 value
@@ -168,7 +178,14 @@ contract OathGov {
         uint256 index
     );
 
-    enum Update {
+    event UpdatedProtocol(
+        UpdateType indexed updateType,
+        bytes32 indexed oldId,
+        bytes32 indexed newId
+    );
+
+    enum UpdateType {
+        Token,
         Provision,
         ByteConstraints,
         PeriodConstraints,
@@ -301,25 +318,31 @@ contract OathGov {
         return _token.address_ != address(0) && _token.minStake != 0;
     }
 
-    function elect(address _delegate, uint256 _amount) public returns (bool) {
+    function delegateTo(address _delegate, uint256 _amount)
+        public
+        returns (bool)
+    {
         require(_amount != 0 && _delegate != address(0));
         delegateVotes[msg.sender][_delegate] = _amount;
-        emit DelegateElected(msg.sender, _delegate, _amount);
+        emit Delegated(msg.sender, _delegate, _amount);
         return true;
     }
 
-    function recall(address _delegate, uint256 _amount) public returns (bool) {
+    function releaseFrom(address _delegate, uint256 _amount)
+        public
+        returns (bool)
+    {
         require(
             _amount != 0 &&
                 _delegate != address(0) &&
                 _amount <= delegateVotes[msg.sender][_delegate]
         );
         delegateVotes[msg.sender][_delegate] -= _amount;
-        emit DelegateRecalled(msg.sender, _delegate, _amount);
+        emit Decommissioned(msg.sender, _delegate, _amount);
         return true;
     }
 
-    function appointManager(
+    function appoint(
         bytes32 _id,
         uint256 _index,
         address _manager
@@ -359,6 +382,7 @@ contract OathGov {
                     votingPools[_id].providers[_index].manager == msg.sender)
         );
         votingPools[_id].providers[_index].amount += _amount;
+        emit Voted(_from, msg.sender, _id, _amount);
         return true;
     }
 
@@ -382,6 +406,7 @@ contract OathGov {
             votingPools[_id].lanes[0] = votingPools[_id].lanes[length - 1];
             votingPools[_id].lanes.pop();
         }
+        emit Voted(_from, msg.sender, _id, _amount);
         return true;
     }
 
@@ -407,32 +432,33 @@ contract OathGov {
             delete votingPools[_id].providers[_index];
             votingPools[_id].lanes.push(_index);
         }
+        emit Loosened(provider.account, msg.sender, _id, _amount);
         return true;
     }
 
-    function proposeBoundaryUpdate(
+    function proposeBoundaryUpdateType(
         uint256 _num1,
         uint256 _num2,
-        Update _update
+        UpdateType _update
     ) public returns (bool) {
         bytes32 newId;
         bytes32 oldId;
-        if (_update == Update.Rates) {
+        if (_update == UpdateType.Rates) {
             oldId = keccak256(abi.encode("rts", rates));
             rates = Rates(uint16(_num1), uint16(_num2));
             require(_isValidRates(rates));
             newId = keccak256(abi.encode("rts", rates));
-        } else if (_update == Update.Provision) {
+        } else if (_update == UpdateType.Provision) {
             oldId = keccak256(abi.encode("mpv", minProvision));
             minProvision = _num1;
             require(minProvision != 0);
             newId = keccak256(abi.encode("mpv", minProvision));
-        } else if (_update == Update.PeriodConstraints) {
+        } else if (_update == UpdateType.PeriodConstraints) {
             oldId = keccak256(abi.encode("pcs", periodConstraints));
             periodConstraints = PeriodConstraints(_num1, _num2);
             require(_isValidPeriodConstraints(periodConstraints));
             newId = keccak256(abi.encode("pcs", periodConstraints));
-        } else if (_update == Update.ByteConstraints) {
+        } else if (_update == UpdateType.ByteConstraints) {
             oldId = keccak256(abi.encode("bcs", byteConstraints));
             byteConstraints = ByteConstraints(uint8(_num1), uint8(_num2));
             require(_isValidByteConstraints(byteConstraints));
@@ -443,10 +469,11 @@ contract OathGov {
                 votingPools[newId].liquidity > votingPools[oldId].liquidity,
             "Insufficient liquidity"
         );
+        emit UpdatedProtocol(_update, oldId, newId);
         return true;
     }
 
-    function proposeTokenUpdate(
+    function proposeTokenUpdateType(
         address[] memory _tokens,
         uint256[] memory _stakes
     ) public returns (bool) {
@@ -476,6 +503,7 @@ contract OathGov {
             votingPools[newId].liquidity > votingPools[oldId].liquidity,
             "Insufficient liquidity"
         );
+        emit UpdatedProtocol(UpdateType.Token, oldId, newId);
         return true;
     }
 
@@ -539,15 +567,19 @@ contract OathFactory {
         oathGov = OathGov(msg.sender);
     }
 
-    event Locked(
+    event Locked(address indexed _account, uint256 _amount, bytes32 _hash);
+
+    event Unlocked(
         address indexed _account,
-        uint256 indexed _amount,
-        bytes32 _hash
+        bytes32 indexed _hash,
+        string _secret
     );
 
-    event Unlocked(address indexed _account, bytes32 indexed _hash);
-
-    event Cracked(address indexed _account, bytes32 indexed _hash);
+    event Cracked(
+        address indexed _account,
+        bytes32 indexed _hash,
+        string _secret
+    );
 
     function findOath(bytes32 _hash)
         public
@@ -598,10 +630,15 @@ contract OathFactory {
             Payout(address(0), payoutAmount),
             ByteConstraints(min, max)
         );
-        return _lock(_hash, oaths[_hash]);
+        emit Locked(
+            oaths[_hash].stake.staker,
+            oaths[_hash].stake.amount,
+            _hash
+        );
+        return _lock(oaths[_hash]);
     }
 
-    function _lock(bytes32 _hash, Oath storage _oath) private returns (bool) {
+    function _lock(Oath storage _oath) private returns (bool) {
         uint256 duration = _oath.deadline - block.timestamp;
         (uint256 min, uint256 max) = oathGov.periodConstraints();
         require(
@@ -611,7 +648,6 @@ contract OathFactory {
             "Beyond time range"
         );
         require(_oath.stake.staker == address(0), "Oath taken");
-        emit Locked(_oath.stake.staker, _oath.stake.amount, _hash);
         require(
             IERC20(_oath.stake.token).transferFrom(
                 _oath.stake.staker,
@@ -628,7 +664,7 @@ contract OathFactory {
         require(oath.deadline > block.timestamp);
         require(oath.payout.recipient == address(0), "Existing recipient");
         oath.payout.recipient = msg.sender;
-        emit Cracked(oath.payout.recipient, hash);
+        emit Cracked(oath.payout.recipient, hash, _secret);
         require(
             IERC20(oath.stake.token).transfer(
                 oath.payout.recipient,
@@ -651,15 +687,15 @@ contract OathFactory {
             byteSize >= byteConstraints.min && byteSize <= byteConstraints.max,
             "Beyond byte range"
         );
-        return _unlock(_hash, oath);
+        emit Unlocked(oath.stake.staker, _hash, _secret);
+        return _unlock(oath);
     }
 
-    function _unlock(bytes32 _hash, Oath storage oath) private returns (bool) {
+    function _unlock(Oath storage oath) private returns (bool) {
         require(oath.stake.staker == msg.sender, "Unauthorized");
         require(oath.payout.recipient == address(0), "Secret was cracked");
         require(block.timestamp >= oath.deadline && oath.stake.locked);
         oath.stake.locked = false;
-        emit Unlocked(oath.stake.staker, _hash);
         require(
             IERC20(oath.stake.token).transfer(
                 oath.stake.staker,
