@@ -340,8 +340,12 @@ contract OathGov {
         returns (bool)
     {
         require(_amount != 0 && _delegate != address(0));
-        delegateVotes[msg.sender][_delegate] = _amount;
-        emit Delegated(msg.sender, _delegate, _amount);
+        delegateVotes[msg.sender][_delegate] += _amount;
+        emit Delegated(
+            msg.sender,
+            _delegate,
+            delegateVotes[msg.sender][_delegate]
+        );
         return true;
     }
 
@@ -379,11 +383,11 @@ contract OathGov {
         require(
             _amount >= minProvision && oathToken.balanceOf(_from) >= _amount
         );
+        oathToken.rebalance(_from, oathToken.balanceOf(_from) - _amount);
         if (_from != msg.sender) {
             require(delegateVotes[_from][msg.sender] >= _amount);
             delegateVotes[_from][msg.sender] -= _amount;
         }
-        oathToken.rebalance(_from, oathToken.balanceOf(_from) - _amount);
         votingPools[_id].liquidity += _amount;
     }
 
@@ -441,14 +445,14 @@ contract OathGov {
         require(_amount <= provider.amount);
         provider.amount -= _amount;
         votingPools[_id].liquidity -= _amount;
-        if (msg.sender != provider.account) {
-            require(msg.sender == provider.manager);
-            delegateVotes[provider.account][msg.sender] += _amount;
-        }
         oathToken.rebalance(
             provider.account,
             oathToken.balanceOf(provider.account) + _amount
         );
+        if (msg.sender != provider.account) {
+            require(msg.sender == provider.manager);
+            delegateVotes[provider.account][msg.sender] += _amount;
+        }
         if (provider.amount == 0) {
             delete votingPools[_id].providers[_index];
             votingPools[_id].lanes.push(_index);
@@ -533,8 +537,8 @@ contract OathGov {
     }
 
     function claimReward(
-        address _owner,
-        bytes32 _id,
+        address _awardee,
+        bytes32 _hash,
         uint256 _searchFrom
     ) public returns (bool) {
         (
@@ -542,18 +546,18 @@ contract OathGov {
             uint256 deadline,
             address token,
             bool locked
-        ) = oathFactory.findOath(_id);
-        require(!locked && !received[_owner][_id]);
-        received[_owner][_id] = true;
+        ) = oathFactory.findOath(_hash);
+        require(!locked && !received[_awardee][_hash]);
+        received[_awardee][_hash] = true;
         uint256 balance = oathToken.latestBalance(
-            _owner,
+            _awardee,
             _searchFrom,
             deadline
         );
         uint256 reward = (serviceFee * balance) / oathToken.totalSupply();
         require(reward != 0);
-        require(IERC20(token).transfer(_owner, reward));
-        emit Rewarded(_owner, _id, reward);
+        require(IERC20(token).transfer(_awardee, reward));
+        emit Rewarded(_awardee, _hash, reward);
         return true;
     }
 }
