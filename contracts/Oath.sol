@@ -559,18 +559,27 @@ contract OathGov {
 }
 
 contract OathFactory {
-    event Locked(address indexed _account, uint256 _amount, bytes32 _hash);
+    event Locked(
+        address indexed _account,
+        bytes32 _hash,
+        uint256 _stake,
+        uint256 _serviceFee
+    );
 
     event Unlocked(
         address indexed _account,
         bytes32 indexed _hash,
-        string _secret
+        string _secret,
+        uint256 _stake,
+        uint256 _serviceFee
     );
 
     event Cracked(
         address indexed _account,
         bytes32 indexed _hash,
-        string _secret
+        string _secret,
+        uint256 _stake,
+        uint256 _payout
     );
 
     struct Oath {
@@ -663,7 +672,7 @@ contract OathFactory {
             ByteConstraints(minBytes, maxBytes)
         );
         require(IERC20(_token).transferFrom(msg.sender, address(this), _stake));
-        emit Locked(msg.sender, _stake, _hash);
+        emit Locked(msg.sender, _hash, _stake, serviceFee);
         return true;
     }
 
@@ -673,9 +682,15 @@ contract OathFactory {
         require(oath.deadline > block.timestamp);
         require(oath.payout.recipient == address(0), "Existing recipient");
         oath.payout.recipient = msg.sender;
-        emit Cracked(oath.payout.recipient, hash, _secret);
         require(
             IERC20(oath.stake.token).transfer(msg.sender, oath.payout.amount)
+        );
+        emit Cracked(
+            oath.payout.recipient,
+            hash,
+            _secret,
+            oath.stake.amount,
+            oath.payout.amount
         );
         return true;
     }
@@ -706,7 +721,13 @@ contract OathFactory {
         require(
             IERC20(oath.stake.token).transfer(address(oathGov), oath.serviceFee)
         );
-        emit Unlocked(oath.stake.staker, _hash, _secret);
+        emit Unlocked(
+            oath.stake.staker,
+            _hash,
+            _secret,
+            oath.stake.amount,
+            oath.serviceFee
+        );
         return true;
     }
 }
