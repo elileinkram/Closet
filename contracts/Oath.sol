@@ -361,7 +361,7 @@ contract OathGov {
         return true;
     }
 
-    function _stamp(
+    function _postVote(
         address _from,
         bytes32 _id,
         uint256 _amount
@@ -377,13 +377,13 @@ contract OathGov {
         votingPools[_id].liquidity += _amount;
     }
 
-    function upvote(
+    function upgradeVote(
         address _from,
         bytes32 _id,
         uint256 _index,
         uint256 _amount
     ) public returns (bool) {
-        _stamp(_from, _id, _amount);
+        _postVote(_from, _id, _amount);
         require(
             _index < votingPools[_id].providers.length &&
                 (votingPools[_id].providers[_index].account == msg.sender ||
@@ -399,7 +399,7 @@ contract OathGov {
         bytes32 _id,
         uint256 _amount
     ) public returns (bool) {
-        _stamp(_from, _id, _amount);
+        _postVote(_from, _id, _amount);
         uint256 length = votingPools[_id].lanes.length;
         if (length == 0) {
             votingPools[_id].providers.push(
