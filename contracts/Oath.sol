@@ -559,6 +559,20 @@ contract OathGov {
 }
 
 contract OathFactory {
+    event Locked(address indexed _account, uint256 _amount, bytes32 _hash);
+
+    event Unlocked(
+        address indexed _account,
+        bytes32 indexed _hash,
+        string _secret
+    );
+
+    event Cracked(
+        address indexed _account,
+        bytes32 indexed _hash,
+        string _secret
+    );
+
     struct Oath {
         uint256 serviceFee;
         uint256 deadline;
@@ -591,20 +605,6 @@ contract OathFactory {
     constructor() {
         oathGov = OathGov(msg.sender);
     }
-
-    event Locked(address indexed _account, uint256 _amount, bytes32 _hash);
-
-    event Unlocked(
-        address indexed _account,
-        bytes32 indexed _hash,
-        string _secret
-    );
-
-    event Cracked(
-        address indexed _account,
-        bytes32 indexed _hash,
-        string _secret
-    );
 
     function findOath(bytes32 _hash)
         public
@@ -644,23 +644,23 @@ contract OathFactory {
     ) public returns (bool) {
         uint256 minStake = oathGov.minStakeOf(_token);
         require(minStake != 0 && _stake >= minStake);
-        (uint256 payoutAmount, uint256 serviceFee) = _calculateOutflows(_stake);
-        require(serviceFee != 0 && payoutAmount > serviceFee);
-        (uint8 minBytes, uint8 maxBytes) = oathGov.byteConstraints();
         require(oaths[_hash].stake.staker == address(0));
-        oaths[_hash] = Oath(
-            serviceFee,
-            _deadline,
-            Stake(_token, msg.sender, _stake, true),
-            Payout(address(0), payoutAmount),
-            ByteConstraints(minBytes, maxBytes)
-        );
         uint256 duration = _deadline - block.timestamp;
         (uint256 minPeriod, uint256 maxPeriod) = oathGov.periodConstraints();
         require(
             _deadline > block.timestamp &&
                 duration >= minPeriod &&
                 duration <= maxPeriod
+        );
+        (uint256 payoutAmount, uint256 serviceFee) = _calculateOutflows(_stake);
+        require(serviceFee != 0 && payoutAmount > serviceFee);
+        (uint8 minBytes, uint8 maxBytes) = oathGov.byteConstraints();
+        oaths[_hash] = Oath(
+            serviceFee,
+            _deadline,
+            Stake(_token, msg.sender, _stake, true),
+            Payout(address(0), payoutAmount),
+            ByteConstraints(minBytes, maxBytes)
         );
         require(IERC20(_token).transferFrom(msg.sender, address(this), _stake));
         emit Locked(msg.sender, _stake, _hash);
