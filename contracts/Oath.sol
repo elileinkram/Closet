@@ -45,6 +45,8 @@ contract OathToken is IERC20 {
 
     mapping(address => mapping(address => uint256)) allowed;
 
+    mapping(address => uint256) public minTransfer;
+
     struct Transaction {
         uint256 balance;
         uint256 timestamp;
@@ -71,7 +73,7 @@ contract OathToken is IERC20 {
         override
         returns (bool)
     {
-        require(amount >= oathGov.minTransferAmount());
+        require(amount >= minTransfer[to]);
         require(amount <= balances[msg.sender]);
         balances[msg.sender] -= amount;
         balances[to] += amount;
@@ -102,12 +104,16 @@ contract OathToken is IERC20 {
         return allowed[_owner][_delegate];
     }
 
+    function setMinTransfer(uint256 amount) public {
+        minTransfer[msg.sender] = amount;
+    }
+
     function transferFrom(
         address from,
         address to,
         uint256 amount
     ) public override returns (bool) {
-        require(amount >= oathGov.minTransferAmount());
+        require(amount >= minTransfer[to]);
         require(amount <= balances[from]);
         require(amount <= allowed[from][msg.sender]);
         balances[from] -= amount;
@@ -199,7 +205,6 @@ contract OathGov {
     enum State {
         Token,
         Provision,
-        Transfer,
         ByteConstraints,
         PeriodConstraints,
         Rates
@@ -253,8 +258,6 @@ contract OathGov {
 
     uint256 public minProvision;
 
-    uint256 public minTransferAmount;
-
     OathToken public oathToken;
 
     OathFactory public oathFactory;
@@ -265,8 +268,7 @@ contract OathGov {
         Rates memory _rates,
         address[] memory _tokens,
         uint256[] memory _stakes,
-        uint256 _minProvision,
-        uint256 _minTransferAmount
+        uint256 _minProvision
     ) {
         require(_isValidByteConstraints(_byteConstraints));
         require(_isValidPeriodConstraints(_periodConstraints));
@@ -277,7 +279,6 @@ contract OathGov {
         periodConstraints = _periodConstraints;
         rates = _rates;
         minProvision = _minProvision;
-        minTransferAmount = _minTransferAmount;
         for (uint256 i = 0; i < _tokens.length; i++) {
             approvedTokens.push(Token(_tokens[i], _stakes[i]));
             require(_isValidToken(approvedTokens[i], _tokens, i + 1));
@@ -473,10 +474,6 @@ contract OathGov {
             rates = Rates(uint16(_num1), uint16(_num2));
             require(_isValidRates(rates));
             newId = keccak256(abi.encode("rts", rates));
-        } else if (_state == State.Transfer) {
-            oldId = keccak256(abi.encode("mta", minTransferAmount));
-            minTransferAmount = _num1;
-            newId = keccak256(abi.encode("mta", minTransferAmount));
         } else if (_state == State.Provision) {
             oldId = keccak256(abi.encode("mpv", minProvision));
             minProvision = _num1;
