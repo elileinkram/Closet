@@ -459,7 +459,7 @@ contract OathGov {
         } else if (_state == State.Transfer) {
             oldId = keccak256(abi.encode("mta", minTransferAmount));
             minTransferAmount = _num1;
-            newId = keccak256(abi.encode("mpv", minProvision));
+            newId = keccak256(abi.encode("mta", minTransferAmount));
         } else if (_state == State.Provision) {
             oldId = keccak256(abi.encode("mpv", minProvision));
             minProvision = _num1;
