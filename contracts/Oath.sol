@@ -383,11 +383,11 @@ contract OathGov {
         require(
             _amount >= minProvision && oathToken.balanceOf(_from) >= _amount
         );
-        oathToken.rebalance(_from, oathToken.balanceOf(_from) - _amount);
         if (_from != msg.sender) {
             require(delegateVotes[_from][msg.sender] >= _amount);
             delegateVotes[_from][msg.sender] -= _amount;
         }
+        oathToken.rebalance(_from, oathToken.balanceOf(_from) - _amount);
         votingPools[_id].liquidity += _amount;
     }
 
@@ -445,14 +445,14 @@ contract OathGov {
         require(_amount <= provider.amount);
         provider.amount -= _amount;
         votingPools[_id].liquidity -= _amount;
-        oathToken.rebalance(
-            provider.account,
-            oathToken.balanceOf(provider.account) + _amount
-        );
         if (msg.sender != provider.account) {
             require(msg.sender == provider.manager);
             delegateVotes[provider.account][msg.sender] += _amount;
         }
+        oathToken.rebalance(
+            provider.account,
+            oathToken.balanceOf(provider.account) + _amount
+        );
         if (provider.amount == 0) {
             delete votingPools[_id].providers[_index];
             votingPools[_id].lanes.push(_index);
