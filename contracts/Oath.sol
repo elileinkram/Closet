@@ -184,6 +184,8 @@ contract OathGov {
         bytes32 indexed newId
     );
 
+    event DividendReceived(address indexed owner, bytes32 indexed id);
+
     enum UpdateType {
         Token,
         Provision,
@@ -525,10 +527,11 @@ contract OathGov {
             _searchFrom,
             deadline
         );
-        require(balance != 0, "No equity");
-        uint256 payout = (serviceFee * balance) / oathToken.totalSupply();
-        require(payout != 0, "No payout");
-        require(IERC20(token).transfer(_owner, payout));
+        require(balance != 0);
+        uint256 dividend = (serviceFee * balance) / oathToken.totalSupply();
+        require(dividend != 0);
+        require(IERC20(token).transfer(_owner, dividend));
+        emit DividendReceived(_owner, _id);
         return true;
     }
 }
