@@ -670,7 +670,8 @@ contract OathFactory {
         );
         require(oath.stake.staker == msg.sender, "Unauthorized");
         require(oath.payout.recipient == address(0), "Secret was cracked");
-        require(block.timestamp >= oath.deadline && oath.stake.locked);
+        require(block.timestamp >= oath.deadline);
+        require(oath.stake.locked);
         oath.stake.locked = false;
         require(
             IERC20(oath.stake.token).transfer(
@@ -682,7 +683,6 @@ contract OathFactory {
             IERC20(oath.stake.token).transfer(address(oathGov), oath.serviceFee)
         );
         emit Unlocked(oath.stake.staker, _hash, _secret);
-
         return true;
     }
 }
