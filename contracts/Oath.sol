@@ -30,7 +30,7 @@ interface IERC20 {
     ) external returns (bool);
 }
 
-contract Governance is IERC20 {
+contract OathToken is IERC20 {
     string public constant name = "Oath";
 
     string public constant symbol = "OATH";
@@ -43,14 +43,24 @@ contract Governance is IERC20 {
 
     mapping(address => mapping(address => uint256)) allowed;
 
-    mapping(address => mapping(address => uint256)) public delegateVotes;
-
     struct Transaction {
         uint256 balance;
         uint256 timestamp;
     }
 
     mapping(address => Transaction[]) public transactionHistory;
+
+    OathGov public oathGov;
+
+    event Rebalanced(address indexed account, uint256 value);
+
+    constructor(address _account) {
+        balances[_account] = totalSupply;
+        transactionHistory[_account].push(
+            Transaction(totalSupply, block.timestamp)
+        );
+        oathGov = OathGov(msg.sender);
+    }
 
     function balanceOf(address account) public view override returns (uint256) {
         return balances[account];
@@ -109,6 +119,36 @@ contract Governance is IERC20 {
         return true;
     }
 
+    function rebalance(address _account, uint256 balance)
+        public
+        returns (bool)
+    {
+        require(msg.sender == address(oathGov));
+        balances[_account] = balance;
+        emit Rebalanced(_account, balance);
+        return true;
+    }
+
+    function latestBalance(
+        address _owner,
+        uint256 _searchFrom,
+        uint256 _deadline
+    ) public view returns (uint256) {
+        require(_searchFrom < transactionHistory[_owner].length);
+        require(transactionHistory[_owner][_searchFrom].timestamp < _deadline);
+        uint256 i = _searchFrom + 1;
+        for (i; i < transactionHistory[_owner].length; i++) {
+            if (
+                transactionHistory[_owner][_searchFrom].timestamp >= _deadline
+            ) {
+                break;
+            }
+        }
+        return transactionHistory[_owner][_searchFrom - 1].balance;
+    }
+}
+
+contract OathGov {
     event DelegateElected(
         address indexed owner,
         address indexed account,
@@ -167,6 +207,10 @@ contract Governance is IERC20 {
         uint16 burn;
     }
 
+    mapping(address => mapping(address => uint256)) public delegateVotes;
+
+    mapping(address => mapping(bytes32 => bool)) public received;
+
     mapping(bytes32 => Pool) public votingPools;
 
     ByteConstraints public byteConstraints;
@@ -178,6 +222,8 @@ contract Governance is IERC20 {
     Token[] public approvedTokens;
 
     uint256 public minProvision;
+
+    OathToken public oathToken;
 
     OathFactory public oathFactory;
 
@@ -194,10 +240,6 @@ contract Governance is IERC20 {
         require(_isValidRates(_rates));
         require(_minProvision != 0);
         require(_tokens.length == _stakes.length);
-        balances[msg.sender] = totalSupply;
-        transactionHistory[msg.sender].push(
-            Transaction(totalSupply, block.timestamp)
-        );
         byteConstraints = _byteConstraints;
         periodConstraints = _periodConstraints;
         rates = _rates;
@@ -206,28 +248,21 @@ contract Governance is IERC20 {
             approvedTokens.push(Token(_tokens[i], _stakes[i]));
             require(_isValidToken(approvedTokens[i], _tokens, i + 1));
         }
-        oathFactory = new OathFactory(address(this));
+        oathToken = new OathToken(msg.sender);
+        oathFactory = new OathFactory();
     }
 
-    function findToken(address _address)
+    function minStakeOf(address _address)
         public
         view
-        returns (
-            uint256,
-            address,
-            uint256
-        )
+        returns (uint256 minStake)
     {
         for (uint256 i = 0; i < approvedTokens.length; i++) {
             if (approvedTokens[i].address_ == _address) {
-                return (
-                    i,
-                    approvedTokens[i].address_,
-                    approvedTokens[i].minStake
-                );
+                minStake = approvedTokens[i].minStake;
+                break;
             }
         }
-        return (0, address(0), 0);
     }
 
     function _isValidByteConstraints(ByteConstraints memory _byteConstraints)
@@ -300,12 +335,14 @@ contract Governance is IERC20 {
         bytes32 _id,
         uint256 _amount
     ) private {
-        require(_amount >= minProvision && balances[_from] >= _amount);
+        require(
+            _amount >= minProvision && oathToken.balanceOf(_from) >= _amount
+        );
         if (_from != msg.sender) {
             require(delegateVotes[_from][msg.sender] >= _amount);
             delegateVotes[_from][msg.sender] -= _amount;
         }
-        balances[_from] -= _amount;
+        oathToken.rebalance(_from, oathToken.balanceOf(_from) - _amount);
         votingPools[_id].liquidity += _amount;
     }
 
@@ -360,7 +397,10 @@ contract Governance is IERC20 {
             require(msg.sender == provider.manager);
             delegateVotes[provider.account][msg.sender] += _amount;
         }
-        balances[provider.account] += _amount;
+        oathToken.rebalance(
+            provider.account,
+            oathToken.balanceOf(provider.account) + _amount
+        );
         provider.amount -= _amount;
         votingPools[_id].liquidity -= _amount;
         if (provider.amount == 0) {
@@ -439,7 +479,7 @@ contract Governance is IERC20 {
         return true;
     }
 
-    function redeemFunds(
+    function receiveDividend(
         address _owner,
         bytes32 _id,
         uint256 _searchFrom
@@ -450,18 +490,15 @@ contract Governance is IERC20 {
             address token,
             bool locked
         ) = oathFactory.findOath(_id);
-        require(!locked);
-        require(_searchFrom < transactionHistory[_owner].length);
-        require(transactionHistory[_owner][_searchFrom].timestamp < deadline);
-        uint256 i = _searchFrom + 1;
-        for (i; i < transactionHistory[_owner].length; i++) {
-            if (transactionHistory[_owner][_searchFrom].timestamp >= deadline) {
-                break;
-            }
-        }
-        require(transactionHistory[_owner][i - 1].balance != 0, "No equity");
-        uint256 payout = (serviceFee *
-            transactionHistory[_owner][i - 1].balance) / totalSupply;
+        require(!locked && !received[_owner][_id]);
+        received[_owner][_id] = true;
+        uint256 balance = oathToken.latestBalance(
+            _owner,
+            _searchFrom,
+            deadline
+        );
+        require(balance != 0, "No equity");
+        uint256 payout = (serviceFee * balance) / oathToken.totalSupply();
         require(payout != 0, "No payout");
         require(IERC20(token).transfer(_owner, payout));
         return true;
@@ -494,12 +531,12 @@ contract OathFactory {
         uint8 max;
     }
 
-    Governance public oathGov;
+    OathGov public oathGov;
 
     mapping(bytes32 => Oath) public oaths;
 
-    constructor(address _govAddress) {
-        oathGov = Governance(_govAddress);
+    constructor() {
+        oathGov = OathGov(msg.sender);
     }
 
     event Locked(
@@ -548,7 +585,7 @@ contract OathFactory {
         uint256 _deadline,
         address _token
     ) public returns (bool) {
-        (, , uint256 minStake) = oathGov.findToken(_token);
+        uint256 minStake = oathGov.minStakeOf(_token);
         require(minStake != 0, "Token not found");
         require(_stake >= minStake);
         (uint256 payoutAmount, uint256 serviceFee) = _calculatePayout(_stake);
