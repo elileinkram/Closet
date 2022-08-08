@@ -644,9 +644,8 @@ contract OathFactory {
     ) public returns (bool) {
         uint256 minStake = oathGov.minStakeOf(_token);
         require(minStake != 0 && _stake >= minStake);
-        require(oaths[_hash].stake.staker == address(0));
-        uint256 duration = _deadline - block.timestamp;
         (uint256 minPeriod, uint256 maxPeriod) = oathGov.periodConstraints();
+        uint256 duration = _deadline - block.timestamp;
         require(
             _deadline > block.timestamp &&
                 duration >= minPeriod &&
@@ -655,6 +654,7 @@ contract OathFactory {
         (uint256 payoutAmount, uint256 serviceFee) = _calculateOutflows(_stake);
         require(serviceFee != 0 && payoutAmount > serviceFee);
         (uint8 minBytes, uint8 maxBytes) = oathGov.byteConstraints();
+        require(oaths[_hash].stake.staker == address(0));
         oaths[_hash] = Oath(
             serviceFee,
             _deadline,
