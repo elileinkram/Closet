@@ -149,6 +149,15 @@ contract OathGov {
         address indexed owner,
         address indexed delegate,
         bytes32 indexed id,
+        uint256 i,
+        uint256 amount
+    );
+
+    event Upvoted(
+        address indexed owner,
+        address indexed delegate,
+        bytes32 indexed id,
+        uint256 i,
         uint256 amount
     );
 
@@ -156,6 +165,7 @@ contract OathGov {
         address indexed owner,
         address indexed delegate,
         bytes32 indexed id,
+        uint256 i,
         uint256 amount
     );
 
@@ -175,7 +185,7 @@ contract OathGov {
         address indexed owner,
         address indexed account,
         bytes32 indexed id,
-        uint256 index
+        uint256 i
     );
 
     event StateChanged(
@@ -390,7 +400,7 @@ contract OathGov {
                     votingPools[_id].providers[_index].manager == msg.sender)
         );
         votingPools[_id].providers[_index].amount += _amount;
-        emit Voted(_from, msg.sender, _id, _amount);
+        emit Upvoted(_from, msg.sender, _id, _index, _amount);
         return true;
     }
 
@@ -401,11 +411,14 @@ contract OathGov {
     ) public returns (bool) {
         _postVote(_from, _id, _amount);
         uint256 length = votingPools[_id].lanes.length;
+        uint256 index;
         if (length == 0) {
+            index = votingPools[_id].providers.length;
             votingPools[_id].providers.push(
                 Provider(_from, msg.sender, _amount)
             );
         } else {
+            index = votingPools[_id].lanes[0];
             votingPools[_id].providers[votingPools[_id].lanes[0]] = Provider(
                 _from,
                 msg.sender,
@@ -414,7 +427,7 @@ contract OathGov {
             votingPools[_id].lanes[0] = votingPools[_id].lanes[length - 1];
             votingPools[_id].lanes.pop();
         }
-        emit Voted(_from, msg.sender, _id, _amount);
+        emit Voted(_from, msg.sender, _id, index, _amount);
         return true;
     }
 
@@ -440,7 +453,7 @@ contract OathGov {
             delete votingPools[_id].providers[_index];
             votingPools[_id].lanes.push(_index);
         }
-        emit Retreated(provider.account, msg.sender, _id, _amount);
+        emit Retreated(provider.account, msg.sender, _id, _index, _amount);
         return true;
     }
 
