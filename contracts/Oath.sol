@@ -30,7 +30,7 @@ interface IERC20 {
     ) external returns (bool);
 }
 
-contract OathToken is IERC20 {
+contract OathGov is IERC20 {
     event Rebalanced(address indexed account, uint256 value);
 
     string public constant name = "Oath";
@@ -53,16 +53,6 @@ contract OathToken is IERC20 {
     }
 
     mapping(address => Transaction[]) public transactionHistory;
-
-    OathGov public oathGov;
-
-    constructor(address _account) {
-        balances[_account] = totalSupply;
-        transactionHistory[_account].push(
-            Transaction(totalSupply, block.timestamp)
-        );
-        oathGov = OathGov(msg.sender);
-    }
 
     function balanceOf(address account) public view override returns (uint256) {
         return balances[account];
@@ -127,12 +117,6 @@ contract OathToken is IERC20 {
         return true;
     }
 
-    function rebalance(address _account, uint256 balance) public {
-        require(msg.sender == address(oathGov));
-        balances[_account] = balance;
-        emit Rebalanced(_account, balance);
-    }
-
     function latestBalance(
         address _owner,
         uint256 _searchFrom,
@@ -148,9 +132,7 @@ contract OathToken is IERC20 {
         }
         return transactionHistory[_owner][i - 1].balance;
     }
-}
 
-contract OathGov {
     event Voted(
         address indexed owner,
         address indexed delegate,
@@ -258,7 +240,7 @@ contract OathGov {
 
     uint256 public minProvision;
 
-    OathToken public oathToken;
+    // OathToken public oathToken;
 
     OathFactory public oathFactory;
 
@@ -283,8 +265,12 @@ contract OathGov {
             approvedTokens.push(Token(_tokens[i], _stakes[i]));
             require(_isValidToken(approvedTokens[i], _tokens, i + 1));
         }
-        oathToken = new OathToken(msg.sender);
+        // oathToken = new OathToken(msg.sender);
         oathFactory = new OathFactory();
+        balances[msg.sender] = totalSupply;
+        transactionHistory[msg.sender].push(
+            Transaction(totalSupply, block.timestamp)
+        );
     }
 
     function minStakeOf(address _address)
@@ -381,14 +367,12 @@ contract OathGov {
         bytes32 _id,
         uint256 _amount
     ) private {
-        require(
-            _amount >= minProvision && oathToken.balanceOf(_from) >= _amount
-        );
+        require(_amount >= minProvision && balances[_from] >= _amount);
         if (_from != msg.sender) {
             require(delegateVotes[_from][msg.sender] >= _amount);
             delegateVotes[_from][msg.sender] -= _amount;
         }
-        oathToken.rebalance(_from, oathToken.balanceOf(_from) - _amount);
+        balances[_from] -= _amount;
         votingPools[_id].liquidity += _amount;
     }
 
@@ -450,10 +434,7 @@ contract OathGov {
             require(msg.sender == provider.manager);
             delegateVotes[provider.account][msg.sender] += _amount;
         }
-        oathToken.rebalance(
-            provider.account,
-            oathToken.balanceOf(provider.account) + _amount
-        );
+        balances[provider.account] += _amount;
         if (provider.amount == 0) {
             delete votingPools[_id].providers[_index];
             votingPools[_id].lanes.push(_index);
@@ -546,12 +527,8 @@ contract OathGov {
         ) = oathFactory.findOath(_hash);
         require(!locked && !received[_awardee][_hash]);
         received[_awardee][_hash] = true;
-        uint256 balance = oathToken.latestBalance(
-            _awardee,
-            _searchFrom,
-            deadline
-        );
-        uint256 reward = (serviceFee * balance) / oathToken.totalSupply();
+        uint256 balance = latestBalance(_awardee, _searchFrom, deadline);
+        uint256 reward = (serviceFee * balance) / totalSupply;
         require(reward != 0);
         require(IERC20(token).transfer(_awardee, reward));
         emit Rewarded(_awardee, _hash, reward);
