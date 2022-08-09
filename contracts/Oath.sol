@@ -43,7 +43,7 @@ contract OathToken is IERC20 {
 
     mapping(address => uint256) private balances;
 
-    mapping(address => mapping(address => uint256)) allowed;
+    mapping(address => mapping(address => uint256)) private allowed;
 
     mapping(address => uint256) public minTransfer;
 
