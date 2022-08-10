@@ -33,6 +33,8 @@ interface IERC20 {
 contract OathToken is IERC20 {
     event Rebalanced(address indexed account, uint256 value);
 
+    event GatedEntry(address indexed account, uint256 value);
+
     string public constant name = "Oath";
 
     string public constant symbol = "OATH";
@@ -45,7 +47,7 @@ contract OathToken is IERC20 {
 
     mapping(address => mapping(address => uint256)) private allowed;
 
-    mapping(address => uint256) public minEntry;
+    mapping(address => uint256) public minEntryAmount;
 
     struct Transaction {
         uint256 balance;
@@ -70,7 +72,7 @@ contract OathToken is IERC20 {
         override
         returns (bool)
     {
-        require(amount >= minEntry[to]);
+        require(amount >= minEntryAmount[to]);
         require(amount <= balances[msg.sender]);
         balances[msg.sender] -= amount;
         balances[to] += amount;
@@ -102,7 +104,8 @@ contract OathToken is IERC20 {
     }
 
     function setEntryMinimum(uint256 amount) public {
-        minEntry[msg.sender] = amount;
+        minEntryAmount[msg.sender] = amount;
+        emit GatedEntry(msg.sender, amount);
     }
 
     function transferFrom(
@@ -110,7 +113,7 @@ contract OathToken is IERC20 {
         address to,
         uint256 amount
     ) public override returns (bool) {
-        require(amount >= minEntry[to]);
+        require(amount >= minEntryAmount[to]);
         require(amount <= balances[from]);
         require(amount <= allowed[from][msg.sender]);
         balances[from] -= amount;
@@ -155,29 +158,7 @@ contract OathGov is OathToken {
         uint256 amount
     );
 
-    event Upvoted(
-        address indexed owner,
-        address indexed delegate,
-        bytes32 indexed id,
-        uint256 i,
-        uint256 amount
-    );
-
-    event Retreated(
-        address indexed owner,
-        address indexed delegate,
-        bytes32 indexed id,
-        uint256 i,
-        uint256 amount
-    );
-
     event Delegated(
-        address indexed owner,
-        address indexed account,
-        uint256 value
-    );
-
-    event Decommissioned(
         address indexed owner,
         address indexed account,
         uint256 value
@@ -350,7 +331,11 @@ contract OathGov is OathToken {
                 _amount <= delegateVotes[msg.sender][_delegate]
         );
         delegateVotes[msg.sender][_delegate] -= _amount;
-        emit Decommissioned(msg.sender, _delegate, _amount);
+        emit Delegated(
+            msg.sender,
+            _delegate,
+            delegateVotes[msg.sender][_delegate]
+        );
         return true;
     }
 
@@ -393,7 +378,13 @@ contract OathGov is OathToken {
                     votingPools[_id].providers[_index].manager == msg.sender)
         );
         votingPools[_id].providers[_index].amount += _amount;
-        emit Upvoted(_from, msg.sender, _id, _index, _amount);
+        emit Voted(
+            _from,
+            msg.sender,
+            _id,
+            _index,
+            votingPools[_id].providers[_index].amount
+        );
         return true;
     }
 
@@ -443,7 +434,7 @@ contract OathGov is OathToken {
             delete votingPools[_id].providers[_index];
             votingPools[_id].lanes.push(_index);
         }
-        emit Retreated(provider.account, msg.sender, _id, _index, _amount);
+        emit Voted(provider.account, msg.sender, _id, _index, provider.amount);
         return true;
     }
 
